@@ -2,20 +2,20 @@
 
 A memory and learning layer for [Claude Code](https://claude.ai/code) agent fleets.
 
-Ranch sits alongside your Claude Code worktrees and automatically captures every correction you make during a session. When a session ends or you switch branches, it runs a reflection pass that distills raw corrections into reusable lessons. Those lessons can be injected into new sessions so your agents start each ticket already knowing what you care about.
-
-```
-corrections → episodic memory → reflection → semantic lessons → context injection
-```
+**→ [USAGE.md](USAGE.md) — commands, flags, and examples at a glance**
 
 ---
 
-## How it works
+Ranch sits alongside your Claude Code worktrees and does two things:
 
-1. **Hooks** (`UserPromptSubmit`, `SessionEnd`) fire on every Claude Code interaction
-2. Messages on ticket branches (e.g. `ECD-123`, `AI-99`, `feature/PROJ-456-thing`) are saved as **feedback** rows
-3. When a session ends or you switch branches, a reflection agent (Claude via the SDK) reads the feedback and extracts **lessons** — reusable, actionable patterns
-4. Before starting a new ticket, `ranch context` prints a markdown block of relevant lessons you can paste into your first message
+1. **Learns** — captures every correction you make during a session, distills them into reusable lessons via reflection, and injects relevant lessons into new sessions so your agents start each ticket already knowing what you care about.
+
+2. **Orchestrates** — runs agents via `ranch run` with structured checkpoints, streaming output, and mid-run interjections (`!approve`, `!reject`, `!note`, `!stop`).
+
+```
+corrections → episodic memory → reflection → semantic lessons → context injection
+brief → ranch run → plan checkpoint → develop → pre-push checkpoint → done
+```
 
 ---
 
@@ -32,22 +32,19 @@ uv pip install -e .
 
 ### Configure your agents
 
-Ranch stores all data in `~/.ranch/`. On first `ranch init`, it creates a starter `~/.ranch/config.toml`:
+On first `ranch init`, a starter `~/.ranch/config.toml` is created:
 
 ```toml
 [agents.my-agent]
 worktree = "/path/to/my/worktree"
 description = "Optional label"
-
-[agents.another-agent]
-worktree = "/path/to/another/worktree"
 ```
 
 Add one section per Claude Code worktree you want to track.
 
 ### Install hooks
 
-Add the following to `~/.claude/settings.json`, using the absolute path to your venv Python:
+Add to `~/.claude/settings.json` (use absolute paths to your venv Python):
 
 ```json
 {
@@ -89,62 +86,57 @@ ranch status   # fleet overview
 
 ## Usage
 
-### Day-to-day
+See **[USAGE.md](USAGE.md)** for the full command reference.
+
+Quick start:
 
 ```bash
-# Work on a ticket branch as normal — feedback is captured automatically
-git checkout -b ECD-123-my-feature
-# ... open Claude Code, work, make corrections ...
+# Supervised ticket run with checkpoints
+ranch run max --ticket ECD-123 --brief "Add /healthz endpoint"
 
-# Reflection fires automatically on session end or branch switch.
-# Force it manually:
-ranch reflect          # uses current branch
-ranch reflect ECD-123  # specific ticket
+# Open-ended task (PR review, bug investigation, etc.)
+ranch run max --ticket ECD-456 --free \
+  --brief "PR #89 is open. Check review comments and reply, making code changes where correct."
 
-# Before starting a new ticket, grab relevant lessons:
-ranch context --tags django,api > /tmp/lessons.md
-# paste the contents into your first CC message
-```
+# Inject lessons into a manual CC session
+ranch context --tags django,api > /tmp/ctx.md
+# paste contents into your first CC message
 
-### Inspect the memory
-
-```bash
-ranch feedback               # recent raw corrections
-ranch feedback --limit 50
-
-ranch lessons                # semantic lessons by confidence
-ranch lessons --category django_specific
+# View what's been learned
+ranch lessons
 ```
 
 ---
 
-## Branch name formats
+## How it works
 
-Ranch detects ticket IDs anywhere in the branch name using the pattern `[A-Z][A-Z0-9]+-\d+`. All of these work:
+### Memory (Phase 1)
+
+The `UserPromptSubmit` and `SessionEnd` hooks fire on every Claude Code interaction. Messages on ticket branches (any branch containing a pattern like `ECD-123`, `AI-99`, `PROJ-456`) are saved as **feedback** rows. When a session ends or you switch branches, a reflection agent reads the feedback and extracts **lessons** — reusable, actionable patterns stored by category and confidence score.
+
+Branch formats supported:
 
 ```
 feature/ECD-1476-some-thing   → ECD-1476
-ECD-1476-some-thing           → ECD-1476
 ECD-1476                      → ECD-1476
 AI-123-my-feature             → AI-123
 hotfix/PROJ-200               → PROJ-200
 ```
 
-Branches with no ticket ID (e.g. `main`, `dev`) are silently ignored.
+### Orchestrator (Phase 2)
 
----
+`ranch run` starts a bidirectional Claude Code SDK session. The agent is given a system prompt that enforces a structured workflow and a set of MCP tools it calls to signal progress:
 
-## Data
-
-All data lives in `~/.ranch/` — outside the repo, shared across all worktrees:
-
-| File | Contents |
+| Tool | When the agent calls it |
 |---|---|
-| `ranch.db` | SQLite database (tickets, feedback, lessons, reflection runs) |
-| `config.toml` | Agent registry |
-| `active_tickets.json` | Session → ticket state for the hooks |
-| `reflection.log` | Output from async reflection runs |
-| `hook_errors.log` | Hook errors (hooks never crash CC) |
+| `record_checkpoint(kind="plan_ready")` | Finished planning, waiting for approval |
+| `record_checkpoint(kind="tests_green")` | Tests pass, continuing to QA |
+| `record_checkpoint(kind="pre_push")` | Ready to push, waiting for approval |
+| `log_decision(...)` | Recording a non-trivial implementation choice |
+
+`plan_ready` and `pre_push` pause the run and wait for `!approve` or `!reject`. Everything is written to the DB so you can `ranch runs` to see history and `ranch resume <id>` to continue a paused session.
+
+Use `--free` to skip the enforced workflow entirely — the brief becomes the complete instruction with no assumed steps.
 
 ---
 
@@ -152,40 +144,47 @@ All data lives in `~/.ranch/` — outside the repo, shared across all worktrees:
 
 ```
 ranch/
-├── config.py       # paths, loads agent registry from ~/.ranch/config.toml
-├── db.py           # SQLAlchemy engine + session context manager
-├── models.py       # Ticket, Feedback, Lesson, ReflectionRun
-├── transcript.py   # parse CC session JSONL transcripts
-├── feedback.py     # episodic memory: log + query
-├── lessons.py      # semantic memory: create, reinforce, query
-├── reflect.py      # reflection runner (calls Claude via claude-code-sdk)
-├── reflect_cli.py  # subprocess entry point used by hooks
-├── context.py      # build lesson-injection markdown for new sessions
-└── cli.py          # Click CLI
+├── config.py           # paths, loads agent registry from ~/.ranch/config.toml
+├── db.py               # SQLAlchemy engine + session context manager
+├── models.py           # Ticket, Feedback, Lesson, ReflectionRun, Run, Checkpoint, Interjection
+├── transcript.py       # parse CC session JSONL transcripts
+├── feedback.py         # episodic memory: log + query
+├── lessons.py          # semantic memory: create, reinforce, query
+├── reflect.py          # reflection runner (calls Claude via claude-code-sdk)
+├── reflect_cli.py      # subprocess entry point used by hooks
+├── context.py          # build lesson-injection markdown for new sessions
+├── cli.py              # Click CLI
+└── runner/
+    ├── orchestrator.py # ClaudeSDKClient wrapper, streaming loop, pause/resume
+    ├── checkpoints.py  # PostToolUse HookMatcher
+    ├── tools.py        # MCP tools (record_checkpoint, log_decision)
+    ├── state.py        # run state machine
+    └── prompts.py      # system prompts (standard + free)
 
 hooks/
 ├── capture_feedback.py   # UserPromptSubmit hook
 └── reflect_on_end.py     # SessionEnd hook
 ```
 
-**Database:** SQLite by default. Swap to PostgreSQL by setting `RANCH_DATABASE_URL`.
+**Database:** SQLite by default at `~/.ranch/ranch.db`. Swap to PostgreSQL via `RANCH_DATABASE_URL` env var.
 
 ---
 
 ## Tuning
 
-The reflection prompt in `ranch/reflect.py` (`REFLECTION_PROMPT`) is the highest-leverage thing to tune. The default prompt is conservative — it asks for 0–3 lessons per ticket and skips one-offs. If you're getting too much noise or missing real patterns, edit it there.
+The reflection prompt in `ranch/reflect.py` (`REFLECTION_PROMPT`) is the highest-leverage thing to tune. The default is conservative — 0–3 lessons per ticket, skips one-offs. Edit it if you're getting noise or missing real patterns.
 
-After a week of use:
+After a week of use, audit your lessons:
 
 ```bash
-ranch lessons   # read every lesson out loud — are they useful?
+ranch lessons
 ```
 
-Manually bump `confidence` (1–5) on lessons you trust. Delete noise directly in SQLite:
+Manually adjust confidence or deactivate noise:
 
 ```bash
 sqlite3 ~/.ranch/ranch.db "UPDATE lessons SET is_active=0 WHERE id=42"
+sqlite3 ~/.ranch/ranch.db "UPDATE lessons SET confidence=4 WHERE id=7"
 ```
 
 ---
