@@ -4,30 +4,41 @@ from rich.console import Console
 from rich.table import Table
 from .db import init_db, db_session
 from .models import Ticket, Feedback, Lesson, ReflectionRun
-from .config import AGENTS, DB_PATH
+from .config import DB_PATH, CONFIG_FILE, write_default_config, reload_agents
 
 console = Console()
 
 
 @click.group()
 def cli():
-    """Ranch — orchestration and learning for the citemed agent fleet."""
+    """Ranch — memory and learning layer for Claude Code agent fleets."""
     pass
 
 
 @cli.command()
 def init():
-    """Initialize the ranch database and verify the agent worktrees exist."""
+    """Initialize the ranch database and agent config."""
     init_db()
     console.print(f"[green]✓[/green] Database initialized at {DB_PATH}")
+
+    write_default_config()
+    agents = reload_agents()
+
+    console.print(f"[green]✓[/green] Config at {CONFIG_FILE}")
     console.print()
-    console.print("[bold]Agent worktrees:[/bold]")
-    for name, agent in AGENTS.items():
-        exists = agent.worktree.exists()
-        marker = "[green]✓[/green]" if exists else "[red]✗[/red]"
-        console.print(f"  {marker} {name:8} {agent.worktree}")
+
+    if agents:
+        console.print("[bold]Agent worktrees:[/bold]")
+        for name, agent in agents.items():
+            exists = agent.worktree.exists()
+            marker = "[green]✓[/green]" if exists else "[red]✗[/red]"
+            console.print(f"  {marker} {name:8} {agent.worktree}")
+    else:
+        console.print(
+            f"[yellow]No agents configured yet.[/yellow] "
+            f"Edit {CONFIG_FILE} to add your worktrees."
+        )
     console.print()
-    console.print("[dim]Next: install hooks (see scope.md Phase 1.10)[/dim]")
 
 
 @cli.command()
@@ -39,11 +50,12 @@ def status():
         lesson_count = db.query(Lesson).count()
         unprocessed = db.query(Feedback).filter(Feedback.extracted_to_lesson == 0).count()
 
+    agents = reload_agents()
     table = Table(title="Ranch Status", show_header=True, header_style="bold cyan")
     table.add_column("Agent", style="cyan")
     table.add_column("Worktree")
     table.add_column("Active Ticket")
-    for name, agent in AGENTS.items():
+    for name, agent in agents.items():
         active = next(
             (t for t in tickets if t.agent_name == name and t.state != "done"), None
         )
