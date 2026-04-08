@@ -168,5 +168,76 @@ def context(tags, out):
         click.echo(md)
 
 
+# ─── Phase 2 commands ────────────────────────────────────────
+
+@cli.command("run")
+@click.argument("agent")
+@click.option("--ticket", required=True, help="Ticket ID (e.g. ECD-123)")
+@click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
+def run_cmd(agent, ticket, brief):
+    """Start a checkpointed run for an agent."""
+    import asyncio
+    from pathlib import Path
+    from .config import reload_agents
+    from .runner.orchestrator import Orchestrator
+
+    agents = reload_agents()
+    if agent not in agents:
+        console.print(f"[red]Unknown agent '{agent}'. Known: {', '.join(agents)}[/red]")
+        raise click.Abort()
+
+    brief_text = Path(brief).read_text() if Path(brief).exists() else brief
+    a = agents[agent]
+    asyncio.run(Orchestrator(agent, a.worktree, ticket, brief_text).run())
+
+
+@cli.command()
+@click.argument("run_id", type=int)
+def resume(run_id):
+    """Resume a paused or stopped run by its ID."""
+    import asyncio
+    from .runner.orchestrator import resume_run
+    asyncio.run(resume_run(run_id))
+
+
+@cli.command("runs")
+@click.option("--limit", default=20, help="Max rows to show")
+@click.option("--agent", default=None, help="Filter by agent name")
+def runs_cmd(limit, agent):
+    """List recent runs and their states."""
+    from .models import Run, Checkpoint, Interjection
+
+    with db_session() as db:
+        q = db.query(Run).order_by(Run.started_at.desc())
+        if agent:
+            q = q.filter(Run.agent == agent)
+        rows = q.limit(limit).all()
+
+    table = Table(title="Ranch Runs", show_header=True, header_style="bold cyan")
+    table.add_column("ID", style="dim")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Ticket")
+    table.add_column("State")
+    table.add_column("Started")
+    table.add_column("Exit")
+
+    state_colors = {
+        "completed": "green", "stopped": "yellow", "error": "red",
+        "needs_approval": "bold yellow", "in_development": "cyan",
+        "planning": "blue", "in_qa": "magenta",
+    }
+    for r in rows:
+        color = state_colors.get(r.state, "white")
+        table.add_row(
+            str(r.id),
+            r.agent,
+            r.ticket or "—",
+            f"[{color}]{r.state}[/{color}]",
+            r.started_at.strftime("%m-%d %H:%M") if r.started_at else "—",
+            r.exit_reason or "—",
+        )
+    console.print(table)
+
+
 if __name__ == "__main__":
     cli()
