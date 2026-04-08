@@ -134,3 +134,55 @@ class ReflectionRun(Base):
     cost_cents         = Column(Integer, default=0)
     summary            = Column(Text, nullable=True)
     error              = Column(Text, nullable=True)
+
+
+# ─── Phase 2 models ───────────────────────────────────────────
+
+class Run(Base):
+    """A checkpointed orchestrated run via ranch run."""
+    __tablename__ = "runs"
+
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
+    agent               = Column(String, index=True)        # max | jeffy | arnold
+    ticket              = Column(String, nullable=True, index=True)
+    sdk_session_id      = Column(String, nullable=True)     # for resume
+    state               = Column(String, default="queued", index=True)
+    state_before_pause  = Column(String, nullable=True)     # restored on approve/reject
+    started_at          = Column(DateTime, default=utcnow)
+    ended_at            = Column(DateTime, nullable=True)
+    exit_reason         = Column(String, nullable=True)     # completed | stopped | error | needs_approval
+    cwd                 = Column(String)
+    initial_prompt      = Column(Text)
+
+    checkpoints   = relationship("Checkpoint",   back_populates="run", lazy="dynamic")
+    interjections = relationship("Interjection", back_populates="run", lazy="dynamic")
+
+
+class Checkpoint(Base):
+    """A pause point where the model announces it needs human review."""
+    __tablename__ = "checkpoints"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    run_id          = Column(Integer, ForeignKey("runs.id"), index=True)
+    kind            = Column(String)                    # plan_ready | tests_green | pre_push | custom
+    summary         = Column(Text)
+    payload_json    = Column(Text, nullable=True)       # diff stats, file list, etc
+    created_at      = Column(DateTime, default=utcnow)
+    decision        = Column(String, nullable=True)     # approved | rejected
+    decision_note   = Column(Text, nullable=True)
+    decided_at      = Column(DateTime, nullable=True)
+
+    run = relationship("Run", back_populates="checkpoints")
+
+
+class Interjection(Base):
+    """A human command sent mid-run via !command syntax."""
+    __tablename__ = "interjections"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    run_id      = Column(Integer, ForeignKey("runs.id"), index=True)
+    kind        = Column(String)                    # note | stop | approve | reject | redirect
+    content     = Column(Text)
+    created_at  = Column(DateTime, default=utcnow)
+
+    run = relationship("Run", back_populates="interjections")
