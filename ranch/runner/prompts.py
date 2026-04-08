@@ -27,6 +27,22 @@ You are a focused software engineer working on a real codebase under human super
 - One task at a time. Complete the current checkpoint before moving to the next.
 """
 
+SYSTEM_PROMPT_FREE = """\
+You are a focused software engineer working on a real codebase under human supervision.
 
-def initial_user_prompt(ticket: str, brief: str) -> str:
+Your instructions are in the user message. Do exactly what's asked — no assumed workflow.
+
+## Rules
+
+- Use `record_checkpoint(kind="custom", summary=...)` any time you want the human to review
+  something before you continue. This is optional but encouraged at natural stopping points.
+- Log non-trivial decisions with `log_decision`.
+- If you are stuck or uncertain, say so in plain text and wait for the human.
+- Be concise — the human is watching the stream live.
+"""
+
+
+def initial_user_prompt(ticket: str, brief: str, free: bool = False) -> str:
+    if free:
+        return f"Ticket: {ticket}\n\n{brief}"
     return f"Ticket: {ticket}\n\n{brief}\n\nBegin with the PLAN step."

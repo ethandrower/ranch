@@ -174,8 +174,14 @@ def context(tags, out):
 @click.argument("agent")
 @click.option("--ticket", required=True, help="Ticket ID (e.g. ECD-123)")
 @click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
-def run_cmd(agent, ticket, brief):
-    """Start a checkpointed run for an agent."""
+@click.option("--free", is_flag=True, default=False, help="Skip the plan→push workflow — brief is the full instruction")
+def run_cmd(agent, ticket, brief, free):
+    """Start a checkpointed run for an agent.
+
+    By default the agent follows the plan→TDD→QA→pre-push workflow.
+    Use --free for open-ended tasks (PR review, bug investigation, etc.)
+    where that structure doesn't apply.
+    """
     import asyncio
     from pathlib import Path
     from .config import reload_agents
@@ -188,7 +194,7 @@ def run_cmd(agent, ticket, brief):
 
     brief_text = Path(brief).read_text() if Path(brief).exists() else brief
     a = agents[agent]
-    asyncio.run(Orchestrator(agent, a.worktree, ticket, brief_text).run())
+    asyncio.run(Orchestrator(agent, a.worktree, ticket, brief_text, free=free).run())
 
 
 @cli.command()

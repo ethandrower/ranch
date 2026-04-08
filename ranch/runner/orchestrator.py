@@ -14,7 +14,7 @@ from rich.rule import Rule
 from ranch.db import db_session
 from ranch.models import Run, Checkpoint, Interjection
 from ranch.runner.checkpoints import make_checkpoint_hook, APPROVAL_REQUIRED
-from ranch.runner.prompts import SYSTEM_PROMPT, initial_user_prompt
+from ranch.runner.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_FREE, initial_user_prompt
 from ranch.runner.state import transition
 from ranch.runner.tools import ranch_mcp
 
@@ -22,11 +22,12 @@ console = Console()
 
 
 class Orchestrator:
-    def __init__(self, agent: str, cwd: Path, ticket: str, brief: str):
+    def __init__(self, agent: str, cwd: Path, ticket: str, brief: str, free: bool = False):
         self.agent = agent
         self.cwd = cwd
         self.ticket = ticket
         self.brief = brief
+        self.free = free
         self.run_id: int | None = None
         self.sdk_session_id: str | None = None
 
@@ -82,7 +83,7 @@ class Orchestrator:
 
         options = ClaudeCodeOptions(
             cwd=str(self.cwd),
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=SYSTEM_PROMPT_FREE if self.free else SYSTEM_PROMPT,
             mcp_servers={"ranch": ranch_mcp},
             allowed_tools=[
                 "Read", "Write", "Edit", "Bash", "Grep", "Glob",
@@ -95,7 +96,7 @@ class Orchestrator:
         try:
             async with ClaudeSDKClient(options=options) as client:
                 # Send the initial prompt
-                await client.query(initial_user_prompt(self.ticket, self.brief))
+                await client.query(initial_user_prompt(self.ticket, self.brief, free=self.free))
 
                 # Start stdin reader in background
                 stdin_task = asyncio.create_task(self._stdin_loop(client))
