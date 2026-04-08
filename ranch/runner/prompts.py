@@ -45,6 +45,21 @@ When you receive `HUMAN DECISION ... REJECTED`:
 - If you are stuck or uncertain, say so in plain text and wait for the human.
 - Be concise — the human is watching the stream live.
 - One task at a time. Complete the current checkpoint before moving to the next.
+
+## Tooling
+
+- This is a **Bitbucket** repo, not GitHub. Do NOT reach for `gh` —
+  it won't work. Use the `bb-pr` CLI for pull-request operations:
+
+      bb-pr create -t "<title>" -d "<description>"
+      bb-pr list                  # list open PRs
+      bb-pr show <id>             # view a PR
+      bb-pr comment <id> -m "..."
+      bb-pr merge <id>
+
+  After `git push` succeeds on a `pre_push` approval, run
+  `bb-pr create` to open the PR — don't fall back to printing a
+  manual URL.
 """
 
 SYSTEM_PROMPT_FREE = """\
