@@ -90,9 +90,13 @@ class Orchestrator:
         console.print("[dim]Commands: !note <text>  !approve  !reject <reason>  !stop[/dim]")
         console.print()
 
+        # Use append_system_prompt (not system_prompt) so Claude Code's default
+        # behavior — including auto-loading the worktree's CLAUDE.md — still
+        # runs. Setting system_prompt= would suppress CLAUDE.md and the agent
+        # would miss project conventions like "branch off develop, not main".
         options = ClaudeCodeOptions(
             cwd=str(self.cwd),
-            system_prompt=SYSTEM_PROMPT_FREE if self.free else SYSTEM_PROMPT,
+            append_system_prompt=SYSTEM_PROMPT_FREE if self.free else SYSTEM_PROMPT,
             mcp_servers={"ranch": ranch_mcp},
             allowed_tools=[
                 "Read", "Write", "Edit", "Bash", "Grep", "Glob",

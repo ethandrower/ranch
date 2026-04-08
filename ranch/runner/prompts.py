@@ -41,6 +41,12 @@ When you receive `HUMAN DECISION ... REJECTED`:
 ## Rules
 
 - Never push, open a PR, or create a branch without a `pre_push` approval.
+- **When you DO create the feature branch, ALWAYS base it on the latest
+  `origin/develop`** — never on main, your current HEAD, or whatever branch
+  the worktree happened to be on. Run `git fetch origin develop` first, then
+  `git checkout -B <branch> origin/develop`. After branching, verify with
+  `git diff origin/develop --stat` that ONLY your ticket's files appear; if
+  unrelated files leak into the diff, the base is wrong — fix it before pushing.
 - Log non-trivial architecture decisions with `log_decision`.
 - If you are stuck or uncertain, say so in plain text and wait for the human.
 - Be concise — the human is watching the stream live.

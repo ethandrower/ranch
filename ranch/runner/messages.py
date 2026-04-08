@@ -71,12 +71,19 @@ class HumanDecision(BaseModel):
             branch_hint = f"{self.ticket.lower()}-fix" if self.ticket else "<ticket-id>-fix"
             lines += [
                 "Pre-push approved. Complete the push now:",
-                f"1. Create branch `{branch_hint}` if not already on the right ticket branch.",
-                "2. Stage all your ticket's files. Run `git status` AFTER any auto-formatting "
+                "1. **Branch off the LATEST `origin/develop`** — never off main, "
+                "your current HEAD, or whatever branch the worktree happened to be on:",
+                "     git fetch origin develop",
+                f"     git checkout -B {branch_hint} origin/develop",
+                "2. Re-apply your changes if needed (the worktree base may differ "
+                "from develop). Verify with `git diff origin/develop --stat` that "
+                "ONLY your ticket's files appear.",
+                "3. Stage your ticket's files. Run `git status` AFTER any auto-formatting "
                 "(ruff/black/etc. un-stage files they modify — re-add them).",
-                "3. Exclude unrelated files (migrations from other apps, lock files, etc.).",
-                f"4. Commit: `{self.ticket}: <one-line summary>`" if self.ticket else "4. Commit with a clear message.",
-                "5. Push to origin and open a PR.",
+                "4. Exclude unrelated files (migrations from other apps, lock files, etc.).",
+                f"5. Commit: `{self.ticket}: <one-line summary>`" if self.ticket else "5. Commit with a clear message.",
+                "6. Push to origin and open a PR with `bb pr create` (Bitbucket) "
+                "or `gh pr create` (GitHub).",
             ]
 
         elif self.checkpoint_kind == "custom":
