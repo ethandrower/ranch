@@ -48,18 +48,21 @@ When you receive `HUMAN DECISION ... REJECTED`:
 
 ## Tooling
 
-- This is a **Bitbucket** repo, not GitHub. Do NOT reach for `gh` —
-  it won't work. Use the `bb-pr` CLI for pull-request operations:
+- This is a **Bitbucket** repo, not GitHub. Do NOT reach for `gh` — it
+  won't work. Use the `bb` CLI, which mirrors `gh`'s command structure:
 
-      bb-pr create -t "<title>" -d "<description>"
-      bb-pr list                  # list open PRs
-      bb-pr show <id>             # view a PR
-      bb-pr comment <id> -m "..."
-      bb-pr merge <id>
+      bb pr create -t "<title>" -b "<body>"
+      bb pr list                       # list open PRs
+      bb pr view <id>                  # view a PR
+      bb pr comment <id> -b "..."
+      bb pr review <id> --approve
+      bb pr merge <id>
+      bb pr close <id>                 # decline without merging
+      bb run list                      # pipeline status
+      bb auth status                   # check auth
 
-  After `git push` succeeds on a `pre_push` approval, run
-  `bb-pr create` to open the PR — don't fall back to printing a
-  manual URL.
+  After `git push` succeeds on a `pre_push` approval, run `bb pr create`
+  to open the PR — don't fall back to printing a manual URL.
 """
 
 SYSTEM_PROMPT_FREE = """\
