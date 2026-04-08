@@ -175,14 +175,18 @@ def context(tags, out):
 @click.option("--ticket", required=True, help="Ticket ID (e.g. ECD-123)")
 @click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
 @click.option("--free", is_flag=True, default=False, help="Skip the plan→push workflow — brief is the full instruction")
-def run_cmd(agent, ticket, brief, free):
+@click.option("--auto-approve", is_flag=True, default=False, help="Auto-approve every checkpoint — for unattended evaluation runs")
+def run_cmd(agent, ticket, brief, free, auto_approve):
     """Start a checkpointed run for an agent.
 
     By default the agent follows the plan→TDD→QA→pre-push workflow.
     Use --free for open-ended tasks (PR review, bug investigation, etc.)
     where that structure doesn't apply.
+    Use --auto-approve to bypass interactive approval (for testing/evaluation).
     """
     import asyncio
+    import os
+    import sys
     from pathlib import Path
     from .config import reload_agents
     from .runner.orchestrator import Orchestrator
@@ -194,7 +198,14 @@ def run_cmd(agent, ticket, brief, free):
 
     brief_text = Path(brief).read_text() if Path(brief).exists() else brief
     a = agents[agent]
-    asyncio.run(Orchestrator(agent, a.worktree, ticket, brief_text, free=free).run())
+    asyncio.run(
+        Orchestrator(agent, a.worktree, ticket, brief_text, free=free, auto_approve=auto_approve).run()
+    )
+    # Force exit — defends against any lingering non-daemon threads (e.g. SDK internals)
+    # that could otherwise keep the process alive after the run is finalized.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 @cli.command()

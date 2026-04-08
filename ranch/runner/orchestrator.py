@@ -14,6 +14,7 @@ from rich.rule import Rule
 from ranch.db import db_session
 from ranch.models import Run, Checkpoint, Interjection
 from ranch.runner.checkpoints import make_checkpoint_hook, APPROVAL_REQUIRED
+from ranch.runner.messages import HumanDecision, HumanNote
 from ranch.runner.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_FREE, initial_user_prompt
 from ranch.runner.state import transition
 from ranch.runner.tools import ranch_mcp
@@ -22,12 +23,13 @@ console = Console()
 
 
 class Orchestrator:
-    def __init__(self, agent: str, cwd: Path, ticket: str, brief: str, free: bool = False):
+    def __init__(self, agent: str, cwd: Path, ticket: str, brief: str, free: bool = False, auto_approve: bool = False):
         self.agent = agent
         self.cwd = cwd
         self.ticket = ticket
         self.brief = brief
         self.free = free
+        self.auto_approve = auto_approve
         self.run_id: int | None = None
         self.sdk_session_id: str | None = None
 
@@ -35,12 +37,14 @@ class Orchestrator:
         self._awaiting_approval = False
         self._approval_ready = asyncio.Event()
         self._approval_result: str | None = None
+        self._last_checkpoint_kind: str | None = None
 
         self.stop_requested = False
 
     # ─── Checkpoint callback (called from PostToolUse hook) ──────────
 
     async def on_checkpoint(self, kind: str, summary: str, payload: dict | None) -> None:
+        self._last_checkpoint_kind = kind
         with db_session() as db:
             run = db.query(Run).filter_by(id=self.run_id).one()
             cp = Checkpoint(
@@ -56,8 +60,13 @@ class Orchestrator:
         console.print(Rule(f"[bold yellow]CHECKPOINT: {kind}"))
         console.print(summary)
         if kind in APPROVAL_REQUIRED:
-            console.print("[dim]Waiting for: !approve  |  !reject <reason>  |  !stop[/dim]")
             self._awaiting_approval = True
+            if self.auto_approve:
+                console.print("[dim](auto-approve mode — firing approval immediately)[/dim]")
+                self._approval_result = "approved"
+                self._approval_ready.set()
+            else:
+                console.print("[dim]Waiting for: !approve  |  !reject <reason>  |  !stop[/dim]")
 
     def requires_approval(self, kind: str) -> bool:
         return kind in APPROVAL_REQUIRED
@@ -98,17 +107,20 @@ class Orchestrator:
                 # Send the initial prompt
                 await client.query(initial_user_prompt(self.ticket, self.brief, free=self.free))
 
-                # Start stdin reader in background
-                stdin_task = asyncio.create_task(self._stdin_loop(client))
+                # Start stdin reader in background — skipped in auto-approve mode
+                stdin_task = None
+                if not self.auto_approve:
+                    stdin_task = asyncio.create_task(self._stdin_loop(client))
 
                 try:
                     await self._main_loop(client)
                 finally:
-                    stdin_task.cancel()
-                    try:
-                        await stdin_task
-                    except asyncio.CancelledError:
-                        pass
+                    if stdin_task is not None:
+                        stdin_task.cancel()
+                        try:
+                            await stdin_task
+                        except asyncio.CancelledError:
+                            pass
 
         except Exception as e:
             await self._finalize(error=str(e))
@@ -117,32 +129,30 @@ class Orchestrator:
         await self._finalize()
 
     async def _main_loop(self, client: ClaudeSDKClient) -> None:
-        """Drive the conversation: receive → checkpoint? → send decision → repeat."""
+        """Drain agent responses until the run finishes.
+
+        Approval is handled inside the PostToolUse hook (see checkpoints.py),
+        which awaits the decision and returns it as additionalContext on the
+        same tool result. This loop just renders and waits for the agent to
+        be done.
+        """
+        from claude_code_sdk._errors import MessageParseError
         while not self.stop_requested:
-            # Drain the current response turn
-            async for msg in client.receive_response():
-                self._render(msg)
-                self._capture_session_id(msg)
-                if self.stop_requested:
-                    return
-
-            # After the turn ends, check if we're waiting at an approval checkpoint
-            if self._awaiting_approval:
-                # Block until the stdin loop sets approval
-                await self._approval_ready.wait()
-                self._approval_ready.clear()
-                self._awaiting_approval = False
-
-                if self.stop_requested:
-                    return
-
-                # Send the decision back so the model can continue
-                decision = self._approval_result or "approved"
-                self._approval_result = None
-                await client.query(f"Human decision: {decision}. Continue.")
-            else:
-                # Model finished its turn without a checkpoint — we're done
-                break
+            try:
+                async for msg in client.receive_response():
+                    self._render(msg)
+                    self._capture_session_id(msg)
+                    if self.stop_requested:
+                        return
+            except MessageParseError as e:
+                if "rate_limit" in str(e).lower():
+                    console.print("[yellow]⏳ rate_limit_event — retrying...[/yellow]")
+                    continue
+                raise
+            # The turn ended cleanly. The agent has either finished or paused
+            # at a checkpoint awaiting hook-injected approval (which it gets
+            # synchronously). Either way, no further driving is needed.
+            break
 
     def _render(self, msg) -> None:
         if isinstance(msg, AssistantMessage):
@@ -166,11 +176,32 @@ class Orchestrator:
     # ─── Stdin interjection loop ─────────────────────────────────────
 
     async def _stdin_loop(self, client: ClaudeSDKClient) -> None:
-        loop = asyncio.get_event_loop()
-        while True:
+        """Read interjections from stdin via a daemon thread + asyncio.Queue.
+
+        Using a daemon thread (instead of run_in_executor) ensures that:
+        - A blocked readline() doesn't prevent process exit at shutdown
+        - EOF on stdin properly terminates the loop instead of busy-spinning
+        """
+        import threading
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        def reader() -> None:
             try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-            except (EOFError, OSError):
+                for line in sys.stdin:
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            except (EOFError, OSError, ValueError):
+                pass
+            finally:
+                # EOF marker — main loop will exit
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        threading.Thread(target=reader, daemon=True, name="ranch-stdin").start()
+
+        while True:
+            line = await queue.get()
+            if line is None:  # EOF
                 break
             line = line.strip()
             if line.startswith("!"):
@@ -192,18 +223,16 @@ class Orchestrator:
 
         elif cmd == "note":
             console.print(f"[dim]Note forwarded: {rest}[/dim]")
-            await client.query(f"[Human note mid-run]: {rest}")
+            await client.query(HumanNote(content=rest).to_prompt())
 
         elif cmd == "approve":
             console.print("[green]Approved.[/green]")
-            self._record_decision("approved", rest)
             self._approval_result = "approved"
             self._approval_ready.set()
 
         elif cmd == "reject":
             reason = rest or "(no reason given)"
             console.print(f"[red]Rejected: {reason}[/red]")
-            self._record_decision("rejected", reason)
             self._approval_result = f"rejected — {reason}"
             self._approval_ready.set()
 
