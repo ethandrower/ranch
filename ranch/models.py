@@ -139,7 +139,7 @@ class ReflectionRun(Base):
 # ─── Phase 2 models ───────────────────────────────────────────
 
 class Run(Base):
-    """A checkpointed orchestrated run via ranch run."""
+    """A checkpointed orchestrated run via ranch run / ranch dispatch."""
     __tablename__ = "runs"
 
     id                  = Column(Integer, primary_key=True, autoincrement=True)
@@ -153,9 +153,19 @@ class Run(Base):
     exit_reason         = Column(String, nullable=True)     # completed | stopped | error | needs_approval
     cwd                 = Column(String)
     initial_prompt      = Column(Text)
+    free                = Column(Integer, default=0)        # bool: --free flag
+    auto_approve        = Column(Integer, default=0)        # bool: --auto-approve flag
+    dispatch_mode       = Column(String, default="foreground")  # foreground | background
+    pid                 = Column(Integer, nullable=True)    # PID of the detached orchestrator process
+    log_path            = Column(String, nullable=True)     # file path for background logs
+    branch_name         = Column(String, nullable=True)     # captured at end-of-run from git
+    pr_id               = Column(String, nullable=True)     # discovered via bb/gh pr list --head <branch>
+    pr_platform         = Column(String, nullable=True)     # "bb" | "gh"
+    pr_url              = Column(String, nullable=True)
 
-    checkpoints   = relationship("Checkpoint",   back_populates="run", lazy="dynamic")
-    interjections = relationship("Interjection", back_populates="run", lazy="dynamic")
+    checkpoints    = relationship("Checkpoint",    back_populates="run", lazy="dynamic")
+    interjections  = relationship("Interjection",  back_populates="run", lazy="dynamic")
+    review_comments = relationship("ReviewComment", back_populates="run", lazy="dynamic")
 
 
 class Checkpoint(Base):
@@ -175,14 +185,43 @@ class Checkpoint(Base):
     run = relationship("Run", back_populates="checkpoints")
 
 
+class ReviewComment(Base):
+    """A PR review comment fetched from bb/gh and fed back to the agent for triage."""
+    __tablename__ = "review_comments"
+
+    id                  = Column(Integer, primary_key=True, autoincrement=True)
+    run_id              = Column(Integer, ForeignKey("runs.id"), index=True)
+    platform_comment_id = Column(String, index=True)          # unique per platform (bb|gh)
+    author              = Column(String, nullable=True)
+    file_path           = Column(String, nullable=True)
+    line_number         = Column(Integer, nullable=True)
+    body                = Column(Text)
+    created_at_remote   = Column(DateTime, nullable=True)
+    fetched_at          = Column(DateTime, default=utcnow)
+    resolved            = Column(Integer, default=0)          # bool
+    resolved_commit_sha = Column(String, nullable=True)
+
+    run = relationship("Run", back_populates="review_comments")
+
+
+Index(
+    "ix_review_comments_unique_platform_id",
+    ReviewComment.run_id, ReviewComment.platform_comment_id,
+    unique=True,
+)
+
+
 class Interjection(Base):
-    """A human command sent mid-run via !command syntax."""
+    """A human command sent mid-run. Written by either the foreground stdin loop
+    or the out-of-process CLI (`ranch approve/reject/note/stop <run_id>`).
+    The orchestrator's DB poll loop consumes rows where processed_at IS NULL."""
     __tablename__ = "interjections"
 
-    id          = Column(Integer, primary_key=True, autoincrement=True)
-    run_id      = Column(Integer, ForeignKey("runs.id"), index=True)
-    kind        = Column(String)                    # note | stop | approve | reject | redirect
-    content     = Column(Text)
-    created_at  = Column(DateTime, default=utcnow)
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    run_id        = Column(Integer, ForeignKey("runs.id"), index=True)
+    kind          = Column(String)                    # note | stop | approve | reject | redirect
+    content       = Column(Text)
+    created_at    = Column(DateTime, default=utcnow)
+    processed_at  = Column(DateTime, nullable=True, index=True)
 
     run = relationship("Run", back_populates="interjections")

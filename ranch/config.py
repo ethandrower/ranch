@@ -10,6 +10,8 @@ RANCH_HOME = HOME / ".ranch"
 RANCH_HOME.mkdir(exist_ok=True)
 DB_PATH = RANCH_HOME / "ranch.db"
 CONFIG_FILE = RANCH_HOME / "config.toml"
+LOG_DIR = RANCH_HOME / "logs"
+LOG_DIR.mkdir(exist_ok=True)
 DATABASE_URL = os.environ.get("RANCH_DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 

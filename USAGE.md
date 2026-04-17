@@ -23,6 +23,61 @@ ranch run max --ticket ECD-123 --free \
 !stop                       Clean exit, saves state
 ```
 
+## Out-of-process commands (any shell, by run_id)
+
+These work for both foreground runs and dispatched (background) runs.
+
+```bash
+ranch approve 42                    # release a checkpoint
+ranch approve 42 --note "LGTM"
+ranch reject 42 "scope too wide"
+ranch note 42 please handle 429s    # forward a note
+ranch stop 42                       # clean exit
+```
+
+## Background runs (dispatch)
+
+```bash
+ranch dispatch max --ticket ECD-123 --brief "Add /healthz endpoint"
+# → Dispatched run #7 (max / ECD-123)
+#     PID:  88421
+#     Log:  /Users/you/.ranch/logs/run_7.log
+#     Approve with: ranch approve 7
+
+ranch status                        # table of all active runs
+ranch status 7                      # detail for one run (PID liveness, pending checkpoint)
+ranch watch --timeout 30            # block until any run transitions, silent on timeout
+ranch watch --run 7                 # block on one specific run
+tail -f $(ranch log 7)              # stream the run's log
+```
+
+`ranch watch` is designed for `/loop`:
+
+```
+/loop 30s ranch watch --timeout 30
+```
+
+## PR review feedback loop
+
+After a run pushes a PR, poll for reviewer comments and respond.
+
+```bash
+ranch poll-pr 7                      # auto-discovers PR from branch, fetches new comments
+ranch poll-pr 7 --pr 367             # manual PR attachment
+ranch respond-pr 7                   # resumes the agent with TRIAGE → FIX → PRE-PUSH workflow
+ranch resolve-comment 7 <cid> --sha <sha>   # usually called by the agent after each fix commit
+```
+
+Continuous polling via `/loop`:
+
+```
+/loop 10m ranch poll-pr 7
+```
+
+`poll-pr` is designed to be loop-friendly: quiet when there's nothing new,
+loud (lists comments + suggests `ranch respond-pr`) when fresh comments arrive.
+See `.claude/commands/ranch-watch-pr.md` for a slash-command wrapper.
+
 ## Checkpoints (agent-initiated pauses)
 
 The agent calls these itself. You respond with `!approve` or `!reject`.

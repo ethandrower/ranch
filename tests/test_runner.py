@@ -105,6 +105,9 @@ async def test_checkpoint_tests_green_does_not_pause():
 
 
 # ─── Interjection recording ───────────────────────────────────
+# The stdin/CLI path enqueues Interjection rows; the DB poll loop dispatches
+# them. These tests cover the dispatch step in isolation. Enqueue + poll →
+# dispatch end-to-end is covered in test_interjections.py.
 
 @pytest.mark.asyncio
 async def test_interjection_stop_sets_flag():
@@ -122,13 +125,9 @@ async def test_interjection_stop_sets_flag():
     orch.run_id = run_id
 
     mock_client = AsyncMock()
-    await orch._handle_interjection("!stop", mock_client)
+    await orch._dispatch_interjection("stop", "", mock_client)
 
     assert orch.stop_requested is True
-    with db_session() as db:
-        row = db.query(Interjection).filter_by(run_id=run_id).first()
-        assert row is not None
-        assert row.kind == "stop"
 
 
 @pytest.mark.asyncio
@@ -147,7 +146,7 @@ async def test_interjection_note_forwards_to_client():
     orch.run_id = run_id
 
     mock_client = AsyncMock()
-    await orch._handle_interjection("!note check the edge case", mock_client)
+    await orch._dispatch_interjection("note", "check the edge case", mock_client)
 
     mock_client.query.assert_called_once()
     call_arg = mock_client.query.call_args[0][0]

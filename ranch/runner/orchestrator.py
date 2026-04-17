@@ -22,6 +22,23 @@ from ranch.runner.tools import ranch_mcp
 console = Console()
 
 
+def _detect_branch(cwd: Path) -> str | None:
+    """Return the current git branch in cwd, or None if unavailable.
+
+    Best-effort — used for PR discovery. Never raises.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), "branch", "--show-current"],
+            capture_output=True, text=True, timeout=5,
+        )
+        branch = result.stdout.strip()
+        return branch or None
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+
+
 class Orchestrator:
     def __init__(self, agent: str, cwd: Path, ticket: str, brief: str, free: bool = False, auto_approve: bool = False):
         self.agent = agent
@@ -74,17 +91,27 @@ class Orchestrator:
     # ─── Main run loop ───────────────────────────────────────────────
 
     async def run(self) -> None:
+        # Two entry paths:
+        # 1. Fresh run (foreground `ranch run`): create the Run row here.
+        # 2. Dispatched run: `ranch dispatch` already created the row and set
+        #    self.run_id before spawning this process — just transition it.
         with db_session() as db:
-            run = Run(
-                agent=self.agent,
-                ticket=self.ticket,
-                cwd=str(self.cwd),
-                initial_prompt=self.brief,
-                state="planning",
-            )
-            db.add(run)
-            db.flush()
-            self.run_id = run.id
+            if self.run_id is None:
+                run = Run(
+                    agent=self.agent,
+                    ticket=self.ticket,
+                    cwd=str(self.cwd),
+                    initial_prompt=self.brief,
+                    state="planning",
+                    free=int(self.free),
+                    auto_approve=int(self.auto_approve),
+                )
+                db.add(run)
+                db.flush()
+                self.run_id = run.id
+            else:
+                run = db.query(Run).filter_by(id=self.run_id).one()
+                run.state = "planning"
 
         console.print(f"[bold cyan]Ranch run #{self.run_id} — {self.agent} / {self.ticket}[/bold cyan]")
         console.print("[dim]Commands: !note <text>  !approve  !reject <reason>  !stop[/dim]")
@@ -111,20 +138,28 @@ class Orchestrator:
                 # Send the initial prompt
                 await client.query(initial_user_prompt(self.ticket, self.brief, free=self.free))
 
-                # Start stdin reader in background — skipped in auto-approve mode
+                # Interjection channels:
+                # - stdin loop (foreground dev UX) enqueues rows — skipped when
+                #   stdin isn't a TTY (dispatched/detached runs have /dev/null)
+                # - db_poll loop dispatches pending rows — always on unless
+                #   auto-approve mode is active (no human driver)
                 stdin_task = None
+                poll_task = None
                 if not self.auto_approve:
-                    stdin_task = asyncio.create_task(self._stdin_loop(client))
+                    poll_task = asyncio.create_task(self._db_poll_loop(client))
+                    if sys.stdin.isatty():
+                        stdin_task = asyncio.create_task(self._stdin_loop())
 
                 try:
                     await self._main_loop(client)
                 finally:
-                    if stdin_task is not None:
-                        stdin_task.cancel()
-                        try:
-                            await stdin_task
-                        except asyncio.CancelledError:
-                            pass
+                    for task in (stdin_task, poll_task):
+                        if task is not None:
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
 
         except Exception as e:
             await self._finalize(error=str(e))
@@ -177,12 +212,18 @@ class Orchestrator:
                         {"sdk_session_id": sid}
                     )
 
-    # ─── Stdin interjection loop ─────────────────────────────────────
+    # ─── Interjection channels ───────────────────────────────────────
+    #
+    # Two channels feed the same pipeline:
+    #   stdin_loop  — foreground `!cmd` syntax → enqueue row (processed_at=NULL)
+    #   CLI commands — `ranch approve/reject/note/stop <run_id>` from any shell
+    # A single db_poll_loop consumes pending rows and dispatches them.
+    # The 500ms poll latency is fine for human-driven interjections.
 
-    async def _stdin_loop(self, client: ClaudeSDKClient) -> None:
-        """Read interjections from stdin via a daemon thread + asyncio.Queue.
+    async def _stdin_loop(self) -> None:
+        """Read `!cmd` lines from stdin and enqueue them as Interjection rows.
 
-        Using a daemon thread (instead of run_in_executor) ensures that:
+        Uses a daemon thread + asyncio.Queue so:
         - A blocked readline() doesn't prevent process exit at shutdown
         - EOF on stdin properly terminates the loop instead of busy-spinning
         """
@@ -198,7 +239,6 @@ class Orchestrator:
             except (EOFError, OSError, ValueError):
                 pass
             finally:
-                # EOF marker — main loop will exit
                 loop.call_soon_threadsafe(queue.put_nowait, None)
 
         threading.Thread(target=reader, daemon=True, name="ranch-stdin").start()
@@ -209,19 +249,38 @@ class Orchestrator:
                 break
             line = line.strip()
             if line.startswith("!"):
-                await self._handle_interjection(line, client)
+                cmd, _, rest = line[1:].partition(" ")
+                self._enqueue_interjection(cmd.lower(), rest)
 
-    async def _handle_interjection(self, line: str, client: ClaudeSDKClient) -> None:
-        cmd, _, rest = line[1:].partition(" ")
-        cmd = cmd.lower()
-
+    def _enqueue_interjection(self, kind: str, content: str) -> None:
         with db_session() as db:
-            db.add(Interjection(run_id=self.run_id, kind=cmd, content=rest))
+            db.add(Interjection(run_id=self.run_id, kind=kind, content=content))
+
+    async def _db_poll_loop(self, client: ClaudeSDKClient) -> None:
+        """Poll the DB every 500ms for unprocessed interjections and dispatch them."""
+        while not self.stop_requested:
+            await asyncio.sleep(0.5)
+            pending: list[tuple[str, str]] = []
+            with db_session() as db:
+                rows = (
+                    db.query(Interjection)
+                    .filter_by(run_id=self.run_id, processed_at=None)
+                    .order_by(Interjection.id)
+                    .all()
+                )
+                now = datetime.now(timezone.utc)
+                for row in rows:
+                    pending.append((row.kind, row.content or ""))
+                    row.processed_at = now
+            for kind, content in pending:
+                await self._dispatch_interjection(kind, content, client)
+
+    async def _dispatch_interjection(self, cmd: str, rest: str, client: ClaudeSDKClient) -> None:
+        cmd = cmd.lower()
 
         if cmd == "stop":
             console.print("[yellow]Stopping run...[/yellow]")
             self.stop_requested = True
-            # Unblock any pending approval wait
             self._approval_result = "stopped"
             self._approval_ready.set()
 
@@ -265,11 +324,18 @@ class Orchestrator:
         exit_reason = "error" if error else ("stopped" if self.stop_requested else "completed")
         final_state = exit_reason  # maps 1:1 for terminal states
 
+        # Capture the branch the agent pushed on so poll-pr can discover the
+        # PR later via `bb/gh pr list --head <branch>`. Best-effort — missing
+        # git, detached HEAD, or stopped runs just leave branch_name NULL.
+        branch_name = _detect_branch(self.cwd)
+
         with db_session() as db:
             run = db.query(Run).filter_by(id=self.run_id).one()
             run.ended_at = datetime.now(timezone.utc)
             run.exit_reason = exit_reason
             run.state = final_state
+            if branch_name:
+                run.branch_name = branch_name
 
         console.print()
         if error:
@@ -341,14 +407,16 @@ async def resume_run(run_id: int) -> None:
     )
 
     async with ClaudeSDKClient(options=options) as client:
-        stdin_task = asyncio.create_task(orch._stdin_loop(client))
+        stdin_task = asyncio.create_task(orch._stdin_loop())
+        poll_task = asyncio.create_task(orch._db_poll_loop(client))
         try:
             await orch._main_loop(client)
         finally:
-            stdin_task.cancel()
-            try:
-                await stdin_task
-            except asyncio.CancelledError:
-                pass
+            for task in (stdin_task, poll_task):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     await orch._finalize()

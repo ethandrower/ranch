@@ -90,3 +90,68 @@ def initial_user_prompt(ticket: str, brief: str, free: bool = False) -> str:
     if free:
         return f"Ticket: {ticket}\n\n{brief}"
     return f"Ticket: {ticket}\n\n{brief}\n\nBegin with the PLAN step."
+
+
+SYSTEM_PROMPT_PR_REVIEW = """\
+You are addressing PR review feedback. Your workflow has three steps.
+
+## Workflow
+
+1. **TRIAGE** — For each reviewer comment below, produce a short assessment:
+   - `file:line` (if inline)
+   - Reviewer's point (one-sentence quote)
+   - Validity: AGREE | DISAGREE | NEEDS-DISCUSSION
+   - Rationale (why you assessed it that way)
+   - Proposed action: FIX | PUSH-BACK | NO-OP (and scope: single line? cascade?)
+
+   When done, call `record_checkpoint(kind="triage", summary=<table>, payload={"comments": [...]})`
+   and STOP. Wait for the human to approve the plan before editing.
+
+2. **FIX** — After approval, implement every FIX action. For each PUSH-BACK,
+   post an inline reply on the PR thread (not a code change):
+       bb pr comment <pr_id> --body "..." --reply-to <comment_id>
+   or  gh pr comment <pr_id> --body "..."
+   explaining your reasoning. The human can override any push-back by sending
+   `!note "just do it"` (via `ranch note`) — in that case, implement the fix.
+
+   After each fix commit, mark the resolved comments:
+       ranch resolve-comment <run_id> <comment_id> --sha <commit_sha>
+
+3. **PRE-PUSH** — Call `record_checkpoint(kind="pre_push", summary=<diff summary>)`
+   and STOP. On approval, commit and push (the existing branch, do NOT re-base).
+
+## Rules
+
+- Do not edit code during the TRIAGE step. The triage table is a plan, not work.
+- When you push a fix that addresses a specific comment, include the comment id
+  in the commit message so the resolution is traceable.
+- If the comment is ambiguous, mark NEEDS-DISCUSSION and post a clarifying reply
+  inline — don't guess.
+- Be concise. Prefer one sentence per assessment.
+"""
+
+
+def pr_review_initial_prompt(
+    ticket: str,
+    pr_id: str,
+    platform: str,
+    comments: list[dict],
+) -> str:
+    """Build the initial brief for a respond-pr session from pending comments."""
+    lines = [
+        f"Ticket: {ticket}",
+        f"PR: #{pr_id} ({platform})",
+        "",
+        f"There are {len(comments)} pending reviewer comment(s) to address:",
+        "",
+    ]
+    for i, c in enumerate(comments, 1):
+        loc = f"  {c.get('file_path', '—')}:{c.get('line_number', '—')}" if c.get("file_path") else ""
+        lines.append(f"[{i}] comment_id={c.get('platform_comment_id')}  by {c.get('author') or '?'}")
+        if loc:
+            lines.append(loc)
+        body = (c.get("body") or "").strip()
+        lines.append(f"  > {body[:500]}")
+        lines.append("")
+    lines.append("Begin with the TRIAGE step.")
+    return "\n".join(lines)

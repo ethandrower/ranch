@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from ranch.runner.messages import CheckpointInput, HumanDecision
 
 CHECKPOINT_TOOL = "mcp__ranch__record_checkpoint"
-APPROVAL_REQUIRED = {"plan_ready", "pre_push"}
+APPROVAL_REQUIRED = {"plan_ready", "pre_push", "triage"}
 
 
 def make_checkpoint_hook(orchestrator) -> HookMatcher:
