@@ -1,10 +1,15 @@
 :root {
   --bg: #0f1115;
   --bg-elevated: #161922;
+  --bg-card: #181c27;
   --border: #232838;
   --text: #e6e9ef;
   --text-muted: #9aa3b2;
+  --text-dim: #6b7384;
   --accent: #6aa2ff;
+  --green: #5cd47a;
+  --yellow: #f6c177;
+  --red: #ff6a6a;
   --error: #ff6a6a;
   font-family:
     -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto,
@@ -87,56 +92,233 @@ body,
   color: var(--error);
 }
 
-.config-summary {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  margin: 0 0 0.75rem 0;
-}
-
-.config-summary code {
+.placeholder code {
   background: var(--bg-elevated);
   padding: 0.1rem 0.35rem;
   border-radius: 3px;
-  font-size: 0.8em;
+  font-size: 0.85em;
 }
 
-.agent-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+/* ─── Worktree grid ────────────────────────────────────────────── */
+
+.grid {
   display: grid;
-  gap: 0.4rem;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 0.6rem;
 }
 
-.agent-list__item {
-  background: var(--bg-elevated);
+.card {
+  background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.5rem 0.75rem;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.75rem;
-  align-items: baseline;
+  border-radius: 6px;
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
   font-size: 0.85rem;
 }
 
-.agent-list__name {
-  font-weight: 600;
+.card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.card__name {
+  font-weight: 700;
+  font-size: 0.95rem;
   color: var(--accent);
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
 
-.agent-list__path {
-  color: var(--text-muted);
+.card__desc {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.card__path {
+  margin: 0;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.agent-list__desc {
-  color: var(--text-muted);
+.card__branch {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
   font-size: 0.78rem;
-  font-style: italic;
+}
+
+.card__branch-name {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: var(--text-muted);
+}
+
+.card__ticket {
+  background: rgba(106, 162, 255, 0.15);
+  color: var(--accent);
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.card__topic {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.card__warn {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--yellow);
+}
+
+.card__warn code {
+  background: rgba(246, 193, 119, 0.1);
+  padding: 0.05rem 0.3rem;
+  border-radius: 2px;
+  font-size: 0.95em;
+}
+
+.pill {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.pill--active {
+  background: rgba(92, 212, 122, 0.12);
+  color: var(--green);
+  border-color: rgba(92, 212, 122, 0.3);
+}
+
+.pill--idle {
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+}
+
+.pill--error {
+  background: rgba(255, 106, 106, 0.12);
+  color: var(--red);
+  border-color: rgba(255, 106, 106, 0.3);
+}
+
+/* ─── Todos ────────────────────────────────────────────────────── */
+
+.card__todos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.1rem;
+}
+
+.card__todos-summary {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.todo-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 8.5rem;
+  overflow-y: auto;
+}
+
+.todo {
+  display: grid;
+  grid-template-columns: 1.2rem 1fr;
+  gap: 0.35rem;
+  align-items: baseline;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.todo__icon {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  text-align: center;
+}
+
+.todo__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo--completed {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-dim);
+}
+.todo--completed .todo__icon {
+  color: var(--green);
+}
+
+.todo--in-progress {
+  color: var(--text);
+}
+.todo--in-progress .todo__icon {
+  color: var(--yellow);
+}
+
+.todo--pending .todo__icon {
+  color: var(--text-dim);
+}
+
+/* ─── Ports row ────────────────────────────────────────────────── */
+
+.card__ports {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.1rem;
+  flex-wrap: wrap;
+}
+
+.port-button {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.74rem;
+  text-decoration: none;
+  font-family: -apple-system, sans-serif;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  transition: border-color 0.15s ease;
+}
+
+.port-button:hover {
+  border-color: var(--accent);
+}
+
+.port-button__num {
+  color: var(--accent);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.95em;
 }
