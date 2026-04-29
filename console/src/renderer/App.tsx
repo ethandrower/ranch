@@ -163,10 +163,11 @@ function WorktreeCard({ worktree }: WorktreeCardProps): JSX.Element {
       <BranchRow session={session} />
       <TopicLine session={session} />
       <TodoSummary todos={session?.todos ?? []} />
-      <PortsRow ports={worktree.ports} />
+      <PortsRow ports={worktree.ports} source={worktree.portsSource} />
+      <DriftWarnings worktree={worktree} />
       {!worktree.envAgentExists && (
         <p className="card__warn">
-          No <code>.env.agent</code> at this worktree — ports unknown.
+          No <code>.env.agent</code> at this worktree.
         </p>
       )}
     </article>
@@ -252,8 +253,10 @@ function TodoSummary({ todos }: { todos: TodoItem[] }): JSX.Element | null {
 
 function PortsRow({
   ports,
+  source,
 }: {
   ports: WorktreeBasics['ports'];
+  source: WorktreeBasics['portsSource'];
 }): JSX.Element | null {
   const buttons: { label: string; port: number }[] = [];
   if (ports.django !== undefined)
@@ -261,6 +264,12 @@ function PortsRow({
   if (ports.vite !== undefined)
     buttons.push({ label: 'Vite', port: ports.vite });
   if (buttons.length === 0) return null;
+  const sourceLabel =
+    source === 'ranch-config'
+      ? 'from ~/.ranch/config.toml'
+      : source === 'env-agent'
+        ? 'from .env.agent (may drift)'
+        : '';
   return (
     <div className="card__ports">
       {buttons.map((b) => (
@@ -270,9 +279,60 @@ function PortsRow({
           href={`http://localhost:${b.port}`}
           target="_blank"
           rel="noreferrer"
+          title={`${b.label} :${b.port} ${sourceLabel}`}
         >
           {b.label} <span className="port-button__num">:{b.port}</span>
         </a>
+      ))}
+    </div>
+  );
+}
+
+function DriftWarnings({
+  worktree,
+}: {
+  worktree: WorktreeBasics;
+}): JSX.Element | null {
+  const messages: string[] = [];
+
+  if (!worktree.envAgentMatches && worktree.envAgentName !== undefined) {
+    messages.push(
+      `.env.agent says AGENT_NAME=${worktree.envAgentName}, but this worktree is registered as ${worktree.agent}. Run \`make sync-env\` to repair.`,
+    );
+  }
+
+  if (worktree.portsSource === 'ranch-config') {
+    const drift: string[] = [];
+    if (
+      worktree.ports.django !== undefined &&
+      worktree.envAgentPorts.django !== undefined &&
+      worktree.ports.django !== worktree.envAgentPorts.django
+    ) {
+      drift.push(
+        `DJANGO_PORT (env: ${worktree.envAgentPorts.django}, config: ${worktree.ports.django})`,
+      );
+    }
+    if (
+      worktree.ports.vite !== undefined &&
+      worktree.envAgentPorts.vite !== undefined &&
+      worktree.ports.vite !== worktree.envAgentPorts.vite
+    ) {
+      drift.push(
+        `VITE_PORT (env: ${worktree.envAgentPorts.vite}, config: ${worktree.ports.vite})`,
+      );
+    }
+    if (drift.length > 0) {
+      messages.push(`.env.agent ports drift: ${drift.join(', ')}`);
+    }
+  }
+
+  if (messages.length === 0) return null;
+  return (
+    <div className="card__drift">
+      {messages.map((m, i) => (
+        <p key={i} className="card__warn">
+          ⚠ {m}
+        </p>
       ))}
     </div>
   );

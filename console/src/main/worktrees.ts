@@ -51,8 +51,13 @@ function parsePort(raw: string | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 && n < 65536 ? n : undefined;
 }
 
-async function readEnvAgent(envAgentPath: string): Promise<WorktreePorts> {
-  if (!existsSync(envAgentPath)) return {};
+interface EnvAgentRead {
+  ports: WorktreePorts;
+  envAgentName?: string;
+}
+
+async function readEnvAgent(envAgentPath: string): Promise<EnvAgentRead> {
+  if (!existsSync(envAgentPath)) return { ports: {} };
   const contents = await readFile(envAgentPath, 'utf8');
   const parsed = parseDotEnv(contents);
   const ports: WorktreePorts = {};
@@ -60,23 +65,49 @@ async function readEnvAgent(envAgentPath: string): Promise<WorktreePorts> {
   const vite = parsePort(parsed['VITE_PORT']);
   if (django !== undefined) ports.django = django;
   if (vite !== undefined) ports.vite = vite;
-  return ports;
+  const result: EnvAgentRead = { ports };
+  if (typeof parsed['AGENT_NAME'] === 'string' && parsed['AGENT_NAME']) {
+    result.envAgentName = parsed['AGENT_NAME'];
+  }
+  return result;
 }
 
 async function inspectAgent(agent: AgentConfig): Promise<WorktreeBasics> {
   const envAgentPath = join(agent.worktree, ENV_AGENT_FILENAME);
   const envAgentExists = existsSync(envAgentPath);
-  const ports = envAgentExists ? await readEnvAgent(envAgentPath) : {};
+  const env = envAgentExists
+    ? await readEnvAgent(envAgentPath)
+    : { ports: {} as WorktreePorts };
+  const envAgentMatches =
+    env.envAgentName === undefined || env.envAgentName === agent.name;
+
+  // Operator-canonical ports from ~/.ranch/config.toml win over .env.agent
+  // because the agents themselves can (and do) clobber the .env.agent file.
+  let ports: WorktreePorts;
+  let portsSource: WorktreeBasics['portsSource'];
+  if (agent.ports && (agent.ports.django || agent.ports.vite)) {
+    ports = { ...agent.ports };
+    portsSource = 'ranch-config';
+  } else if (env.ports.django !== undefined || env.ports.vite !== undefined) {
+    ports = env.ports;
+    portsSource = 'env-agent';
+  } else {
+    ports = {};
+    portsSource = 'unknown';
+  }
+
   const basics: WorktreeBasics = {
     agent: agent.name,
     worktreePath: agent.worktree,
     envAgentPath,
     envAgentExists,
+    envAgentMatches,
     ports,
+    portsSource,
+    envAgentPorts: env.ports,
   };
-  if (agent.description !== undefined) {
-    basics.description = agent.description;
-  }
+  if (agent.description !== undefined) basics.description = agent.description;
+  if (env.envAgentName !== undefined) basics.envAgentName = env.envAgentName;
   return basics;
 }
 

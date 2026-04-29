@@ -16,6 +16,12 @@ export interface AgentConfig {
   name: string;
   worktree: string;
   description?: string;
+  /**
+   * Operator-canonical ports for this agent (lives in ~/.ranch/config.toml,
+   * out of reach of the agents themselves). When set, the card displays
+   * these and warns if .env.agent disagrees.
+   */
+  ports?: WorktreePorts;
 }
 
 export interface ProjectConfig {
@@ -47,7 +53,20 @@ export interface WorktreeBasics {
   description?: string;
   envAgentPath: string;
   envAgentExists: boolean;
+  /** AGENT_NAME from .env.agent — useful for catching stale env files */
+  envAgentName?: string;
+  /** True if envAgentName matches the registered agent name */
+  envAgentMatches: boolean;
+  /**
+   * Ports surfaced on the card. Sourced from `agents.<name>.ports` in
+   * ~/.ranch/config.toml when present (operator-canonical), otherwise
+   * fall back to whatever `.env.agent` had (potentially stale).
+   */
   ports: WorktreePorts;
+  /** Where `ports` came from. */
+  portsSource: 'ranch-config' | 'env-agent' | 'unknown';
+  /** Ports as read directly from .env.agent — used to detect drift. */
+  envAgentPorts: WorktreePorts;
 }
 
 // ─── CC session state (MVP-3: from ~/.claude/projects/<encoded>/*.jsonl) ─

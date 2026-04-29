@@ -7,6 +7,7 @@ import type {
   AgentConfig,
   ProjectConfig,
   RanchConfig,
+  WorktreePorts,
 } from '../shared/types.js';
 
 const RANCH_DIR = process.env.RANCH_HOME ?? join(homedir(), '.ranch');
@@ -16,6 +17,19 @@ const PROJECTS_PATH = join(RANCH_DIR, 'projects.toml');
 interface AgentSection {
   worktree?: unknown;
   description?: unknown;
+  ports?: unknown;
+}
+
+function parsePortsBlock(raw: unknown): WorktreePorts | undefined {
+  if (!isObject(raw)) return undefined;
+  const out: WorktreePorts = {};
+  for (const key of ['django', 'vite'] as const) {
+    const v = raw[key];
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 65536) {
+      out[key] = v;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 interface ProjectSection {
@@ -45,6 +59,8 @@ function parseAgents(raw: unknown): AgentConfig[] {
     if (typeof section.description === 'string') {
       agent.description = section.description;
     }
+    const ports = parsePortsBlock(section.ports);
+    if (ports !== undefined) agent.ports = ports;
     agents.push(agent);
   }
   return agents;
