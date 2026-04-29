@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import type {
   SessionState,
+  TerminalEnv,
   TodoItem,
   WorktreeBasics,
 } from '../shared/types.js';
+import { Terminal } from './Terminal.js';
 
 const SESSION_POLL_MS = 4000;
 const WORKTREE_POLL_MS = 30_000;
@@ -15,11 +17,31 @@ interface AppState {
   error?: string;
 }
 
+interface ActiveTerminal {
+  agent: string;
+  /** Bumped on each (re-)open to force a fresh attach. */
+  generation: number;
+}
+
 export function App(): JSX.Element {
   const [state, setState] = useState<AppState>({
     status: 'loading',
     worktrees: [],
   });
+  const [activeTerminal, setActiveTerminal] = useState<ActiveTerminal | null>(
+    null,
+  );
+  const [terminalEnv, setTerminalEnv] = useState<TerminalEnv | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.ranch.terminal.env().then((env) => {
+      if (!cancelled) setTerminalEnv(env);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Initial load + slow refresh of worktree basics (.env.agent rarely changes).
   useEffect(() => {
@@ -58,6 +80,18 @@ export function App(): JSX.Element {
     };
   }, []);
 
+  function openTerminal(agent: string): void {
+    setActiveTerminal((prev) =>
+      prev?.agent === agent
+        ? { agent, generation: prev.generation + 1 }
+        : { agent, generation: 1 },
+    );
+  }
+
+  function closeTerminal(): void {
+    setActiveTerminal(null);
+  }
+
   return (
     <div className="app">
       <header className="app__header">
@@ -69,13 +103,40 @@ export function App(): JSX.Element {
       <main className="app__layout">
         <section className="pane pane--grid">
           <h2>Worktree grid</h2>
-          <Grid state={state} />
+          <Grid
+            state={state}
+            onOpenTerminal={openTerminal}
+            terminalEnv={terminalEnv}
+          />
         </section>
         <section className="pane pane--terminal">
-          <h2>Terminal</h2>
-          <p className="placeholder">
-            Embedded terminal coming in MVP-6 (tmux attach).
-          </p>
+          <div className="pane__heading">
+            <h2>
+              Terminal
+              {activeTerminal && (
+                <span className="pane__heading-sub">
+                  {' '}
+                  · ranch-{activeTerminal.agent}
+                </span>
+              )}
+            </h2>
+            {activeTerminal && (
+              <button className="link-button" onClick={closeTerminal}>
+                detach
+              </button>
+            )}
+          </div>
+          {activeTerminal ? (
+            <Terminal
+              key={activeTerminal.agent}
+              agent={activeTerminal.agent}
+              generation={activeTerminal.generation}
+            />
+          ) : (
+            <p className="placeholder">
+              Click <strong>Open terminal</strong> on a worktree card to attach.
+            </p>
+          )}
         </section>
         <section className="pane pane--inbox">
           <h2>Inbox</h2>
@@ -90,7 +151,15 @@ export function App(): JSX.Element {
   );
 }
 
-function Grid({ state }: { state: AppState }): JSX.Element {
+function Grid({
+  state,
+  onOpenTerminal,
+  terminalEnv,
+}: {
+  state: AppState;
+  onOpenTerminal: (agent: string) => void;
+  terminalEnv: TerminalEnv | null;
+}): JSX.Element {
   if (state.status === 'loading') {
     return <p className="placeholder">Loading worktrees…</p>;
   }
@@ -107,19 +176,38 @@ function Grid({ state }: { state: AppState }): JSX.Element {
     );
   }
   return (
-    <div className="grid">
-      {state.worktrees.map((wt) => (
-        <WorktreeCard key={wt.agent} worktree={wt} />
-      ))}
-    </div>
+    <>
+      {terminalEnv && !terminalEnv.tmuxAvailable && (
+        <p className="card__warn card__warn--banner">
+          ⚠ tmux not found on PATH. Install with <code>brew install tmux</code>{' '}
+          to enable embedded terminals.
+        </p>
+      )}
+      <div className="grid">
+        {state.worktrees.map((wt) => (
+          <WorktreeCard
+            key={wt.agent}
+            worktree={wt}
+            onOpenTerminal={onOpenTerminal}
+            terminalEnv={terminalEnv}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
 interface WorktreeCardProps {
   worktree: WorktreeBasics;
+  onOpenTerminal: (agent: string) => void;
+  terminalEnv: TerminalEnv | null;
 }
 
-function WorktreeCard({ worktree }: WorktreeCardProps): JSX.Element {
+function WorktreeCard({
+  worktree,
+  onOpenTerminal,
+  terminalEnv,
+}: WorktreeCardProps): JSX.Element {
   const [session, setSession] = useState<SessionState | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
@@ -170,6 +258,20 @@ function WorktreeCard({ worktree }: WorktreeCardProps): JSX.Element {
           No <code>.env.agent</code> at this worktree.
         </p>
       )}
+      <footer className="card__actions">
+        <button
+          className="card__action"
+          onClick={() => onOpenTerminal(worktree.agent)}
+          disabled={terminalEnv !== null && !terminalEnv.tmuxAvailable}
+          title={
+            terminalEnv && !terminalEnv.tmuxAvailable
+              ? 'tmux not installed'
+              : 'Attach an embedded terminal to this worktree'
+          }
+        >
+          Open terminal
+        </button>
+      </footer>
     </article>
   );
 }

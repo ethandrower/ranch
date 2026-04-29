@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerIpcHandlers } from './ipc.js';
+import { detachAllForWebContents } from './pty.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -31,6 +32,12 @@ function createMainWindow(): BrowserWindow {
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // Clean up any ptys we own when the window goes away. The tmux session
+  // lives on independently — we just close the client.
+  window.on('closed', () => {
+    detachAllForWebContents(window.webContents);
   });
 
   if (isDev) {

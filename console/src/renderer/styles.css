@@ -83,6 +83,13 @@ body,
   color: var(--text-muted);
 }
 
+.pane--terminal {
+  padding: 0.75rem 0.5rem 0.5rem 0.5rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .placeholder {
   color: var(--text-muted);
   font-size: 0.85rem;
@@ -321,4 +328,126 @@ body,
   color: var(--accent);
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.95em;
+}
+
+/* ─── Card actions ─────────────────────────────────────────────── */
+
+.card__actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.card__action {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.3rem 0.65rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.card__action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(106, 162, 255, 0.08);
+}
+
+.card__action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.card__warn--banner {
+  margin: 0 0 0.6rem 0;
+  background: rgba(246, 193, 119, 0.08);
+  border: 1px solid rgba(246, 193, 119, 0.3);
+  border-radius: 4px;
+  padding: 0.35rem 0.6rem;
+}
+
+.card__drift {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+/* ─── Terminal pane ────────────────────────────────────────────── */
+
+.pane__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.pane__heading h2 {
+  margin: 0;
+}
+
+.pane__heading-sub {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 0.7rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+}
+
+.link-button:hover {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
+.terminal {
+  position: relative;
+  width: 100%;
+  height: calc(100% - 1.6rem);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal__pane {
+  flex: 1;
+  min-height: 0;
+  padding: 0.5rem;
+}
+
+.terminal__pane .xterm,
+.terminal__pane .xterm-viewport,
+.terminal__pane .xterm-screen {
+  height: 100% !important;
+}
+
+.terminal__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 17, 21, 0.85);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.terminal__overlay--error {
+  color: var(--red);
+  pointer-events: auto;
 }
