@@ -84,7 +84,10 @@ export function Terminal({ agent, generation }: TerminalProps): JSX.Element {
 
     const offExit = window.ranch.terminal.onExit((evt) => {
       if (evt.terminalId !== attachedTerminalId) return;
-      xterm.writeln(`\r\n\x1b[33m[ranch] tmux client detached\x1b[0m`);
+      const sigPart = evt.signal !== null ? ` signal=${evt.signal}` : '';
+      xterm.writeln(
+        `\r\n\x1b[33m[ranch] tmux client detached (exit=${evt.exitCode}${sigPart})\x1b[0m`,
+      );
     });
 
     // 3. Forward keystrokes from xterm into the pty.

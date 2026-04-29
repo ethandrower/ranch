@@ -33,6 +33,15 @@ interface ActiveTerminal {
   pty: IPty;
   /** WebContents that this terminal pushes data to. */
   webContents: WebContents;
+  /**
+   * Number of live attach() calls that haven't been balanced by detach().
+   * React 18 StrictMode in dev double-fires effects (mount → cleanup →
+   * mount), and even in production a card may attach twice across a
+   * re-render before the first detach lands. We only SIGHUP the tmux
+   * client when refCount drops to 0 — otherwise we kill the pty out
+   * from under a still-mounted Terminal component.
+   */
+  refCount: number;
 }
 
 /** Indexed by terminalId (`ranch-<agent>`). */
@@ -99,14 +108,19 @@ export async function attachTerminal(
 
   const terminalId = `ranch-${opts.agent}`;
 
-  // If already attached for this webContents, re-use.
+  // If already attached for this webContents, increment the refcount and
+  // re-use. The same data stream is fanned out — re-spawning would kill
+  // the live one and break the still-mounted component.
   const existing = terminals.get(terminalId);
   if (existing && existing.webContents === opts.webContents) {
+    existing.refCount += 1;
     return { ok: true, terminalId };
   }
-  // If a different window had it attached, detach the old client first.
+  // If a different window had it attached, force-detach the old client
+  // first. (This is intentional: only one window owns a terminal at a
+  // time. Multi-window support is post-MVP.)
   if (existing) {
-    detachInternal(terminalId);
+    detachInternal(terminalId, true);
   }
 
   // tmux new-session:
@@ -136,6 +150,7 @@ export async function attachTerminal(
     agent: opts.agent,
     pty,
     webContents: opts.webContents,
+    refCount: 1,
   };
   terminals.set(terminalId, active);
 
@@ -145,6 +160,10 @@ export async function attachTerminal(
   });
 
   pty.onExit(({ exitCode, signal }) => {
+    // Diagnostic — useful when tmux dies for non-obvious reasons.
+    console.error(
+      `[ranch.pty] ${terminalId} exited (exitCode=${exitCode}, signal=${signal ?? 'none'})`,
+    );
     if (!active.webContents.isDestroyed()) {
       active.webContents.send('terminal:exit', {
         terminalId,
@@ -180,12 +199,22 @@ export function resizeTerminal(
 }
 
 export function detachTerminal(terminalId: string): void {
-  detachInternal(terminalId);
+  detachInternal(terminalId, false);
 }
 
-function detachInternal(terminalId: string): void {
+/**
+ * @param force when true, ignore refcount and SIGHUP immediately. Used
+ *   when a window closes (we want all its ptys gone, regardless of how
+ *   many components were mid-cleanup) and when transferring a terminal
+ *   between windows.
+ */
+function detachInternal(terminalId: string, force: boolean): void {
   const t = terminals.get(terminalId);
   if (!t) return;
+  if (!force) {
+    t.refCount -= 1;
+    if (t.refCount > 0) return;
+  }
   try {
     // SIGHUP → tmux client detaches cleanly without killing the session.
     t.pty.kill('SIGHUP');
@@ -202,7 +231,7 @@ function detachInternal(terminalId: string): void {
 export function detachAllForWebContents(wc: WebContents): void {
   for (const [id, t] of terminals.entries()) {
     if (t.webContents === wc) {
-      detachInternal(id);
+      detachInternal(id, true);
     }
   }
 }
