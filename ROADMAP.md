@@ -1,182 +1,348 @@
 # Ranch Roadmap
 
-Ranch is an orchestration and learning layer for Claude Code agent fleets. It manages multiple agent worktrees for the citemed project, providing memory capture, lesson injection, and a checkpointed orchestrator.
+Ranch is a **local-first console for Claude Code agent fleets**. It does not replace the interactive Claude Code session — it sits around it, managing the things Claude Code itself will never own: which worktrees exist, which agent has which ticket, which docker stack is on which port, which PRs are waiting on review feedback, and which lessons should be injected when a session starts.
+
+The product is not a CLI runner that streams JSONL. The product is the **console** — an Electron app — and the supporting layers that make it possible to operate N agents across M repositories without cognitive overload.
 
 ---
 
-## Current Status
+## What ranch is, in one paragraph
 
-**Phases 0 through 2+ are complete. 58 tests passing.**
-
-Ranch can run a single agent session end-to-end with a structured plan-TDD-QA-pre-push workflow, capture corrections, distill them into reusable lessons, and inject those lessons into future sessions. The orchestrator supports streaming output, mid-run interjections, checkpoint approval/rejection, session resume, and free-form mode.
-
-Phase 2+ hardened the orchestrator with rate-limit retry, Pydantic message contracts, hook-based approval delivery, `--auto-approve` for unattended runs, daemon-thread stdin, `append_system_prompt` for worktree CLAUDE.md loading, test DB isolation, and `bb` CLI integration.
-
-**What's missing:** runs block the terminal. You cannot dispatch work to multiple agents simultaneously and monitor them from a single session. There is no cross-agent learning, no PR feedback loop, no dashboard, and no production-grade infrastructure.
+The interactive CC tab is the unit of work. Plan mode, hooks, slash commands, approval — those stay where they are. Ranch is the layer above: a project + agent registry, a port ledger, a docker orchestrator, an event bus, a memory layer, and a UI that ties them together. Every CC session — whether interactive (human in the loop) or autonomous (SDK + auto-approve overnight) — emits events to the same bus and is rendered in the same grid. You open ranch, pick the repos you care about, spin up N agent sessions, and see at a glance: who's working on what, which docker stack is up on which port, which PR has new review comments, what's awaiting approval, and where each session left off.
 
 ---
 
-## What We Learned
+## Status
 
-Key architectural decisions made during Phases 1-2+:
+**Phases 0 through 2+ shipped.** Memory capture, lesson reflection, single-agent SDK orchestrator with checkpoints, mid-run interjections, free-form mode, hook-based approval delivery, `--auto-approve`, `bb` CLI integration. 58 tests passing.
 
-- **Hook-based approval delivery.** Checkpoint approval is delivered via a PostToolUse hook that awaits the human decision and returns it as `additionalContext`. This eliminates the race condition between SDK system notifications and the approval payload, giving deterministic delivery.
+**Phases 3a/3b/5a/5b shipped (commit dd59e28).** Background dispatch (`ranch dispatch`), fleet watch (`ranch watch`), out-of-process interjection (`ranch approve/reject/note/stop <run_id>`), PR feedback poll/respond loop (`ranch poll-pr`, `ranch respond-pr`).
 
-- **`append_system_prompt` for CLAUDE.md.** Each worktree has its own CLAUDE.md with branch-off-develop enforcement and project conventions. Rather than injecting this into the brief, we append it via the SDK's `append_system_prompt` parameter so it behaves like a native system prompt and doesn't pollute the user message.
-
-- **Pydantic message contracts.** `CheckpointInput`, `HumanDecision`, and `HumanNote` are Pydantic models that validate all data flowing between the orchestrator, hooks, and stdin loop. This caught serialization bugs early and makes the protocol self-documenting.
-
-- **Branch-off-develop enforcement.** The worktree CLAUDE.md instructs the agent to always branch off `develop`, never `main`. This prevents accidental pushes to the release branch and keeps the git workflow consistent across all agents.
-
-- **Test DB isolation.** A `conftest.py` fixture creates a fresh in-memory SQLite database per test, ensuring tests never leak state. This was necessary after early test failures caused by shared DB state.
+The CLI works. The next phase is the **console** — an Electron app that exposes all of this through a UI you can actually live in.
 
 ---
 
-## Phase 0: Foundation (done)
+## Architecture (the pivot)
 
-- SQLAlchemy/SQLite database with models for Ticket, Feedback, Lesson, ReflectionRun
-- Agent registry via `~/.ranch/config.toml`
-- CLI scaffold with Click (`ranch init`, `ranch status`)
+### Two channels, never crossed
 
-## Phase 1: Memory Capture (done)
+1. **Display channel** — pty bytes from a real terminal into `xterm.js` in the renderer. For interactive sessions only. Unparsed. The human's eyeballs are the consumer. No semantic extraction from this stream — that's a tar pit.
+2. **Event channel** — structured `RunEvent` envelopes flowing from CC hooks (interactive mode) and the SDK runner (autonomous mode) into a single event bus. The bus persists to the DB and fans out to subscribers (the console renderer, the inbox, notification routers). Every UI element above "raw terminal" reads from this channel.
 
-- `UserPromptSubmit` hook captures corrections as episodic feedback
-- `SessionEnd` hook triggers reflection, which distills feedback into reusable lessons
-- `ranch context` builds lesson-injection markdown for new sessions
-- Lessons stored with category, tags, confidence score
-- Ticket ID extraction from branch names (ECD-123, AI-99, PROJ-456 patterns)
+### Two dispatch backends behind one schema
 
-## Phase 2: Checkpointed Orchestrator (done)
+| | Interactive | Autonomous |
+|---|---|---|
+| Driver | `node-pty` running `claude` CLI under `tmux` | SDK session in worker subprocess |
+| Approvals | Human via plan mode | `--auto-approve` by default |
+| Output | xterm.js, focus-driven | log file, tail-on-demand |
+| Lifecycle | As long as session is open | Task-driven; ends when SDK ends or budget hits |
+| Detach | Closing console keeps tmux session alive | Worker keeps running, supervised |
+| Use case | Intensive build, Q&A, debugging | Overnight build-fix, bulk PR triage |
 
-- `ranch run` starts a Claude Code SDK session with structured workflow
-- Checkpoints: `plan_ready`, `tests_green`, `pre_push`, `custom`
-- Streaming output with real-time display
-- Mid-run interjections: `!approve`, `!reject`, `!note`, `!stop`
-- `ranch resume <id>` to continue paused sessions
-- `ranch runs` to list run history
-- `--free` flag for open-ended tasks (no enforced workflow)
+Both write the same `Run`, `Checkpoint`, `Decision`, and `Lesson` rows. Two adapters, one schema, one event stream. Don't unify them under a single runner with mode flags — the duty cycles and failure modes are different enough that abstraction-fitting will hurt.
 
-## Phase 2+: Hardening (done)
+### Project config lives in ranch, not in repos
 
-- Rate-limit event retry logic
-- Pydantic message contracts (CheckpointInput, HumanDecision, HumanNote)
-- Hook-based approval delivery via PostToolUse
-- `--auto-approve` flag for unattended evaluation runs
-- Daemon-thread stdin loop with clean process exit
-- `append_system_prompt` for worktree CLAUDE.md injection
-- Test DB isolation via conftest.py
-- `bb` CLI integration (Bitbucket CLI, gh-style)
-- 58 tests passing
+Today citemed_web's Makefile owns the agent roster, the port table, and the worktree base. That's wrong — those are operator concerns, not application concerns. They block reuse across repos and make adding a fifth agent a code change.
 
----
+Ranch becomes the source of truth for:
+- The agent registry (`~/.ranch/config.toml`)
+- The project registry (paths to repos, their compose fragments, their per-agent service definitions)
+- The port ledger (per-(project, agent) port assignments, persisted in the DB)
+- Workspace lifecycle (create / destroy / reset / sync-env)
+- Shared infra lifecycle (postgres + redis + docker network)
 
-## Phase 3: Fleet Dispatch & Monitoring
+Each application repo provides only:
+- `docker-compose.agent.yml` — per-agent service definitions
+- `docker-compose.shared.yml` — shared service definitions
+- `.env.agent.template` — variables ranch will fill in
+- `ranch.project.toml` — declares the above + project metadata
 
-The biggest gap today: `ranch run` blocks the terminal. You can only run one agent at a time. Phase 3 makes Ranch a true fleet manager.
-
-### 3a. Background Dispatch
-
-`ranch dispatch <agent> --ticket <id> --brief <text>` starts a run in the background and returns immediately. Output is logged to a file. The run record in the DB tracks the PID and log path.
-
-### 3b. Watch / Wait
-
-`ranch watch` blocks until any running agent finishes, then reports which agent completed and the outcome (success, failure, awaiting approval). This enables a "foreman" pattern: dispatch N agents, then `watch` in a loop to handle completions as they arrive.
-
-### 3c. Batch Dispatch
-
-`ranch dispatch-batch --file tickets.csv` or similar takes a list of tickets and auto-assigns them to idle agents. Requires idle detection (3d).
-
-### 3d. Idle Agent Detection
-
-`ranch status` already exists but reports static config. Enhance it with real-time awareness: is the agent currently running a task? What's the PID? When did it start? This is the foundation for batch dispatch and the dashboard.
-
-### 3e. Jira/Issue Tracker Integration (stretch)
-
-Auto-pick tickets from the sprint board. Lower priority than the core dispatch loop.
+The Makefile loses its agent block entirely.
 
 ---
 
-## Phase 4: Cross-Agent Learning & Specialization
+## What we learned (Phases 1–2+)
 
-Currently each agent learns independently. If jeffy learned about the citesource export system, max has no access to that knowledge.
+- **Hook-based approval delivery.** PostToolUse hook awaits the human decision and returns it as `additionalContext`. Eliminates the race between SDK system notifications and the approval payload.
+- **`append_system_prompt` for CLAUDE.md.** Each worktree's CLAUDE.md is appended via the SDK parameter rather than injected into the brief.
+- **Pydantic message contracts.** `CheckpointInput`, `HumanDecision`, `HumanNote` validate everything flowing between orchestrator, hooks, stdin, and DB.
+- **Branch-off-develop enforcement** via worktree CLAUDE.md prevents accidental main-branch pushes.
+- **DB-polled interjection table** unified the foreground stdin loop and out-of-process CLI commands behind one code path.
 
-### 4a. Shared Lesson Pool
-
-Lessons are already in a shared SQLite DB, but the context injection only considers the current agent's feedback history. Extend `ranch context` and the automatic injection to pull from the global lesson pool, optionally filtered by relevance to the current ticket's domain.
-
-### 4b. Agent Specialization Profiles
-
-Track which agent succeeds most often in which area (frontend, backend, scrapers, data pipeline). Use this to inform auto-assignment in batch dispatch. Could be as simple as tagging lessons/runs with domain categories and computing a per-agent score.
-
-### 4c. Conflict Detection
-
-Before dispatching two agents, check if their tickets are likely to touch the same files or modules. Warn the operator or serialize the work. Could use file-change history from past runs or static analysis of the ticket brief.
+These all carry forward. The console builds on top of them; it doesn't replace them.
 
 ---
 
-## Phase 5: PR Feedback Loop
+## Done
 
-After an agent pushes a branch and creates a PR, the work isn't done. Reviewers leave comments. Today those comments are manually relayed. Phase 5 closes the loop.
+### Phase 0: Foundation
+SQLAlchemy + SQLite schema, agent registry, Click CLI scaffold, `ranch init`, `ranch status`.
 
-### 5a. Poll for Review Comments
+### Phase 1: Memory capture
+`UserPromptSubmit` and `SessionEnd` hooks → episodic feedback → reflection → semantic lessons → `ranch context` injection. Ticket ID extraction from branch names.
 
-After a PR is created, periodically poll `bb pr view <id> --comments` (or `gh pr view`) for new review feedback. Store comments in the DB linked to the run.
+### Phase 2: Checkpointed orchestrator
+`ranch run` with structured workflow (plan_ready, tests_green, pre_push), streaming output, mid-run interjections, `ranch resume`, `ranch runs`, `--free` mode.
 
-### 5b. Auto-Feed Comments to Agent
+### Phase 2+: Hardening
+Rate-limit retry, Pydantic contracts, hook-based approval, `--auto-approve`, daemon-thread stdin, `append_system_prompt` for CLAUDE.md, test DB isolation, `bb` CLI integration.
 
-When new comments arrive, start (or resume) an agent session with the review feedback as the brief. The agent reads the comments, makes fixes, and pushes again.
+### Phase 3a/3b: Background dispatch + watch
+`ranch dispatch` runs in the background and returns immediately. `ranch watch` blocks until any agent completes. Process tracking + log path in the Run record.
 
-### 5c. Webhook-Based Notification (stretch)
+### Phase 5a/5b: PR feedback loop
+`ranch poll-pr <run_id>` (loop-friendly, idempotent) fetches review comments. `ranch respond-pr <run_id>` resumes the agent with a triage → propose → push checkpoint structure.
 
-Replace polling with Bitbucket/GitHub webhooks for real-time PR comment notifications. Requires a small HTTP server or integration with an existing webhook receiver.
-
----
-
-## Phase 6: Web Dashboard
-
-A visual interface for fleet management.
-
-### 6a. FastAPI Backend
-
-REST API exposing runs, agents, lessons, feedback. WebSocket endpoint for real-time streaming of agent output.
-
-### 6b. Frontend
-
-Simple web UI (could be React, htmx, or even a terminal UI). Visualize: active runs, agent status grid, lesson browser, feedback timeline.
-
-### 6c. Manual Dispatch from UI
-
-Start runs, approve/reject checkpoints, and send interjections from the browser instead of the CLI.
-
-### 6d. Lesson Management
-
-View, edit, deactivate, and merge lessons from the UI. Bulk operations for cleanup after a sprint.
+### Phase 11 (out-of-band): Out-of-process interjection
+DB-polled `Interjection` table. `ranch approve/reject/note/stop <run_id>` work from any shell against any background run.
 
 ---
 
-## Phase 7: Production Hardening
+## Phase A — Console foundation (Electron MVP)
 
-Move from single-user SQLite to a production-grade deployment.
+The smallest lovable console: open ranch, see your repos, see your agents, dispatch an interactive session, and watch it.
 
-### 7a. PostgreSQL Migration
+### A1. Electron app skeleton
+- TypeScript, Vite, electron-builder
+- Main process: project + agent registry loading, IPC bridge, native modules
+- Renderer: React or Solid (decide before issue is picked up)
+- Preload script with `contextBridge` for safe IPC surface
+- Single window, multi-pane layout
 
-SQLAlchemy already abstracts the DB, but SQLite has concurrency limits that matter once multiple agents write simultaneously. Migrate to PostgreSQL and add connection pooling.
+### A2. RunEvent bus + schema
+- Unified `RunEvent` envelope: `{run_id, ts, kind, payload, source}`
+- Kinds: `session_started`, `session_idle`, `tool_use`, `checkpoint_pending`, `checkpoint_resolved`, `pr_comment_received`, `build_failed`, `build_passed`, `agent_blocked`, `agent_done`
+- Bus implementation: unix socket (`~/.ranch/events.sock`) + DB persistence + fan-out to subscribers
+- Hook-side publishers (Phase A4) and SDK-side publishers (Phase D1) both target this bus
+- Renderer subscribes via Electron IPC (proxied from main)
 
-### 7b. Multi-User Support & Auth
+### A3. Project registry
+- `~/.ranch/projects.toml` with one entry per repo: path, label, project type (e.g. citemed_web style multi-service compose, single-service, etc.), pointer to `ranch.project.toml`
+- "Add project" UX: pick a directory, ranch reads its `ranch.project.toml`, validates, registers
+- Multi-repo support is first-class — ranch is not citemed_web-specific
 
-API keys or OAuth for the dashboard. Per-user agent pools and lesson namespaces.
+### A4. Worktree grid (read-only first pass)
+- One card per (project, agent) cell
+- Shows: branch, ticket, dirty/clean, last commit, attached run state, attached docker stack state (if any), unread inbox count
+- Pure read view — clicking a card opens detail; no dispatch yet
+- Updates live from the event bus
 
-### 7c. Rate Limit Awareness & Queuing
+### A5. Hook → event bus publishers
+- `UserPromptSubmit`, `Stop`, `Notification`, `PostToolUse`, `SessionEnd` hooks all emit `RunEvent`s to the bus
+- Replaces direct DB writes from hooks with bus writes (bus persists to DB internally)
+- One canonical `publish_event(kind, payload)` helper imported by all hooks
 
-The orchestrator already retries on rate limits. Extend this to queue-level awareness: if the API is throttled, don't start new agent runs. Share rate-limit state across agents.
+### A6. PTY + xterm.js + tmux integration
+- `node-pty` in main process spawns `tmux new-session -A -s ranch-<run_id> -- claude …` (idempotent attach)
+- `xterm.js` + `@xterm/addon-webgl` in renderer
+- Resize forwarding, clipboard, keybinding pass-through
+- Closing the console window detaches tmux but does not kill it; reopening reattaches
+- A6 is the load-bearing piece — most other features compose on top of it
 
-### 7d. Cost Tracking & Budgets
+### A7. Interactive dispatch UI
+- "New session" modal: pick project, pick agent, ticket id (optional), brief (optional, becomes first user message)
+- Pre-seeds the first message with brief + injected lessons + project context
+- After the first message, the user drives — ranch is a launcher, not a wrapper
 
-Track token usage per run, per ticket, per sprint. Set budgets and alert or pause when thresholds are exceeded.
+**Acceptance for Phase A:** Open ranch, see citemed_web with its 4 agents, dispatch an interactive session for max on ticket ECD-X, work in the embedded terminal exactly as you would in iTerm, close the window, reopen, see the session still alive, reattach.
 
-### 7e. Metrics & Observability
+---
 
-How long do runs take? What's the success rate? Which checkpoints get rejected most often? Export metrics to Prometheus/Grafana or build simple charts in the dashboard.
+## Phase B — Project config externalization
+
+Move per-project agent/port/worktree config out of application repos and into ranch.
+
+### B1. `ranch.project.toml` schema + parser
+- Declares: project name, worktree base, compose fragment paths, env template path, shared-infra fragment path, per-agent service names (so ranch knows which services need ports)
+- Validation + clear error messages
+- Lives at the repo root; checked into the application repo
+
+### B2. Port ledger
+- Dynamic allocation: ranch picks the next free port in a configurable range per service type
+- Persisted in DB keyed by `(project, agent, service)`
+- `ranch ports show` for visibility, `ranch ports release` for cleanup
+- Conflict detection against running OS-level listeners
+- (Decision needed: deterministic-by-hash vs dynamic-allocated. Default dynamic; deterministic available as fallback for environments that need stable URLs.)
+
+### B3. Workspace lifecycle commands
+- `ranch workspace create <agent> --project <name>` — creates worktree, allocates ports, writes `.env.agent` from template, runs migrations
+- `ranch workspace destroy <agent> --project <name>` — tears down compose stack, removes worktree (with confirmation), releases ports
+- `ranch workspace reset <agent> --project <name> --branch <branch>` — fresh task branch, clean DB schema
+- `ranch workspace sync-env --project <name>` — re-syncs base env across all agent worktrees after secret rotation
+
+### B4. citemed_web reference migration
+- Strip the agent block from citemed_web's Makefile (lines 219–end of agent section)
+- Add `ranch.project.toml` to citemed_web declaring the same shape
+- Verify all four agents (jeffy/arnold/max/kesha) still bootstrap end-to-end via ranch
+- Document the migration so other repos can follow
+
+**Acceptance for Phase B:** Adding a fifth agent to citemed_web is a `ranch workspace create` away with no edits to citemed_web. Adding `citesource` as a second project is "drop a `ranch.project.toml` and register it" with no new ranch code.
+
+---
+
+## Phase C — Docker orchestration in console
+
+The docker pieces that today live in citemed_web's Makefile become first-class console features.
+
+### C1. Per-project compose lifecycle
+- "Start stack" / "Stop stack" / "Restart stack" buttons on each worktree card
+- Wraps `docker compose --env-file <agent .env> -f <base> -f <agent compose> -p citemed_<agent>`
+- Stream compose output to a per-stack log panel
+- Surfaces compose failures (port conflicts, missing images) as inbox items
+
+### C2. Shared infra lifecycle
+- Console-managed shared infra (postgres, redis, network) — `ranch infra up/down/status`
+- Auto-start when first agent stack starts; auto-stop never (operator opt-in)
+- Health checks (postgres reachable, redis reachable) surfaced in the UI
+
+### C3. Stack health + log tailing
+- Per-service status indicators on each worktree card
+- Click to expand: live log tail per service, with filtering
+- "Open service shell" affordance for quick debugging
+
+### C4. "Open in browser"
+- For each agent's web-facing service, a button that opens `http://localhost:<port>` using the port ledger
+- Multi-port support (Django + Vite usually, sometimes more)
+- Shows port in the UI so the operator knows where to point manual curl/Postman calls
+
+**Acceptance for Phase C:** Operator never types `make max && make max-vite` again. Bringing up agent max's stack is one click; opening max's app in the browser is one click; stopping it is one click.
+
+---
+
+## Phase D — Autonomous dispatch backend
+
+Second adapter onto the same event bus, for fire-and-forget overnight work.
+
+### D1. SDK orchestrator → RunEvent emitter
+- Refactor `ranch/runner/orchestrator.py` to publish `RunEvent`s to the bus instead of (or in addition to) direct DB writes
+- Existing checkpoint/decision/interjection plumbing becomes event consumers
+- No functional change for users; clean separation for the console
+
+### D2. Long-running run supervision
+- Worker process supervisor: zombie detection, log rotation, restart policy
+- Stop/resume controls in the console UI
+- Resource budget per run (max wall-clock, max tokens, max push count)
+
+### D3. Build-fix loop primitive
+- New brief template: "fix the failing build, push, repeat until green or budget exhausted"
+- CI watch: subscribe to Bitbucket/GitHub status checks → publish `build_failed` / `build_passed` events
+- Agent waits on the next build status before iterating
+- Budget controls: max N pushes, max M minutes, hard stop on flapping
+- Use case: dispatch overnight, wake up to a green branch or a clear "stuck after 4 attempts" report
+
+### D4. Run-mode selector in dispatch UI
+- "New session" modal gets a mode toggle: Interactive / Autonomous
+- Mode-specific options: budget for autonomous, brief required for both, auto-approve only available for autonomous
+- Same dispatch endpoint, different backend; same card in the grid
+
+**Acceptance for Phase D:** Dispatch an autonomous "fix builds on `feature/foo` until green" run, close ranch, come back in the morning, see either a green branch + diff in the inbox or a clear blocker report with retry history.
+
+---
+
+## Phase E — Inbox + run context
+
+Make "where are we and what's been done?" answerable at a glance.
+
+### E1. Unified inbox
+- One stream of: PR comments, CI failures, idle agents, awaiting-approval checkpoints, autonomous-run completions, autonomous-run blockers
+- Clicking an inbox item routes to the relevant context (run detail, PR, agent, etc.)
+- Sourced from the event bus (Phase A2)
+
+### E2. Run topic + status summary
+- Each run gets a human-friendly topic (auto-derived from ticket title or brief, editable)
+- Live one-line status: "drafting plan", "awaiting plan approval", "running tests", "tests green, awaiting pre-push approval", "blocked: rate limited", "done"
+- Visible on the worktree grid card and in the run detail view
+
+### E3. Run timeline
+- Full event stream per run: prompts, tool uses, checkpoints, decisions, files touched, commits made, pushes, PRs opened
+- Filterable by event kind
+- Replaces "scroll the terminal" as the way to answer "what did this agent do?"
+
+### E4. System notifications
+- Native OS notifications for high-priority inbox items (awaiting approval, build broken, autonomous run done)
+- Configurable per-event-kind quiet hours
+- (Stretch: Slack/Discord routing for team awareness)
+
+**Acceptance for Phase E:** Open ranch after lunch, glance at the inbox, see "max needs pre-push approval (2h ago), arnold's autonomous run finished green (45m ago), jeffy got 3 new PR comments (10m ago)" — no need to context-switch into terminals to know where everything stands.
+
+---
+
+## Phase F — Memory layer integration
+
+The existing memory/lessons system becomes a console feature, not a separate CLI surface.
+
+### F1. Memory panel
+- Browse, search, edit, deactivate, merge lessons from the UI
+- Bulk operations (deactivate all sub-confidence-2, merge near-duplicates)
+- Confidence histograms, category breakdowns
+
+### F2. Cross-project lesson scoping
+- Lessons can be project-scoped (citemed_web only), agent-scoped (max only), or global
+- Context injection respects scope
+- Tagging UI to mark/correct scope as lessons accumulate
+
+### F3. Lesson-in-context preview
+- When dispatching, show which lessons will be injected before the session starts
+- Edit/disable on a per-dispatch basis without touching the lesson DB
+
+---
+
+## Phase G — Production hardening (deferred)
+
+When the console proves out, these become real concerns. Not before.
+
+### G1. PostgreSQL migration
+- Multiple agent processes writing concurrently hits SQLite's limits eventually
+- SQLAlchemy already abstracts; need pooling config, alembic migrations, SQLite→PG migration tool
+- Default stays SQLite for single-operator use
+
+### G2. Cost tracking
+- Token usage per run, per ticket, per project, per sprint
+- Budget alerts and pause-on-threshold for autonomous runs
+- Surfaced in run detail and rolled up in inbox
+
+### G3. Rate limit awareness
+- Cross-agent rate limit state — don't start new runs during global throttling
+- Already have per-run retry; needs queue-level coordination
+
+### G4. Specialization profiles (was issue #5)
+- Per-agent success scores by domain
+- Surface in dispatch UI as an "agent picker" hint
+- Conflict detection: warn before dispatching two runs likely to touch overlapping files
+
+---
+
+## Explicit non-goals
+
+- **Replacing the interactive Claude Code experience.** Plan mode, hooks, slash commands, the CC permission model — those stay where they are. Ranch is the console, not the IDE.
+- **Multi-user/multi-tenant.** This is a single-operator local-first tool. If a team needs shared visibility, that's a different product.
+- **Web/cloud dashboard.** A web app cannot embed pty, control docker, or watch the local file system. Electron is the correct chassis.
+- **A general-purpose AI agent platform.** Ranch is opinionated about Claude Code as the agent runtime. Other agents would require a different abstraction layer that we're not building.
+
+---
+
+## Pickup order
+
+For someone joining this project, the dependency tree is roughly:
+
+```
+A1 (Electron skeleton)
+  └─ A2 (event bus) ──────┬─ A4 (worktree grid)
+  └─ A3 (project registry) ┘
+                          ├─ A5 (hook publishers)
+                          │     └─ A6 (PTY + tmux)
+                          │           └─ A7 (interactive dispatch)
+                          │
+                          └─ B1 (project.toml) ─ B2 (ports) ─ B3 (lifecycle) ─ B4 (citemed_web migration)
+                                                                                    └─ C1..C4 (docker)
+                          
+A2 (event bus) ── D1 (SDK adapter) ─ D2 (supervision) ─ D3 (build-fix) ─ D4 (mode toggle)
+A2 (event bus) ── E1 (inbox) ─ E2 (status) ─ E3 (timeline) ─ E4 (notifications)
+```
+
+Phase A is the trunk. Phase B can run in parallel once A2 + A3 land. Phases C/D/E sit on top of A. Phase F is opportunistic. Phase G is deferred.
 
 ---
 
@@ -184,6 +350,6 @@ How long do runs take? What's the success rate? Which checkpoints get rejected m
 
 Ranch is an internal tool for the citemed team. If you're picking this up:
 
-1. Read `USAGE.md` for the CLI reference.
+1. Read `USAGE.md` for the current CLI reference.
 2. Run `pytest` to verify the test suite (58 tests).
-3. The highest-leverage next step is Phase 3a (background dispatch) — it unblocks everything else.
+3. The highest-leverage next step is **A1 + A2 + A4** — the smallest console slice that demonstrates the architecture works end-to-end.
