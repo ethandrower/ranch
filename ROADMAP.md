@@ -18,7 +18,24 @@ The interactive CC tab is the unit of work. Plan mode, hooks, slash commands, ap
 
 **Phases 3a/3b/5a/5b shipped (commit dd59e28).** Background dispatch (`ranch dispatch`), fleet watch (`ranch watch`), out-of-process interjection (`ranch approve/reject/note/stop <run_id>`), PR feedback poll/respond loop (`ranch poll-pr`, `ranch respond-pr`).
 
+**Phase A1 in review (PR #35).** Electron + Vite + React skeleton with typed IPC surface and config loader landed.
+
 The CLI works. The next phase is the **console** — an Electron app that exposes all of this through a UI you can actually live in.
+
+---
+
+## Sequencing — MVP first, full vision second
+
+Everything described below is still wanted. The **end state** is the full architecture: project registry, port ledger, docker orchestration, autonomous dispatch, inbox, memory panel. The sequencing question is which slice delivers value first.
+
+The **immediate-value slice** is not "scale ranch to N projects and M agents." It is **"give me ambient awareness of the four worktrees I'm already developing in."** Today the operator opens four iTerm tabs, runs `claude` in each, and loses track within an hour of which tab is on which ticket, what each one's TODO list looks like, and which port to hit when testing. That problem is solved by a single rich screen — no project registry, no port ledger, no docker orchestration, no autonomous mode required. The four worktrees and their compose stacks already exist; ranch just needs to **observe and surface** what's happening in them.
+
+So the roadmap is split:
+
+- **Phase MVP** — Ambient awareness over the existing hardcoded four-worktree setup. Read-only observation, embedded terminal attach, todo/branch/port visibility. **This is the next thing built.**
+- **Phases A (remainder), B, C, D, E, F** — The full vision. Sequenced after MVP proves the UX is right.
+
+Phase B (`ranch.project.toml`, port ledger, workspace lifecycle), Phase C (docker orchestration), Phase D (autonomous mode), and parts of Phase A (project registry, dispatch UI) are deliberately deferred. They are still in scope long-term — they unlock multi-project use, fifth-agent-without-code-change, and overnight unattended runs — but none of them are required to fix the day-one context-switching pain.
 
 ---
 
@@ -100,16 +117,73 @@ DB-polled `Interjection` table. `ranch approve/reject/note/stop <run_id>` work f
 
 ---
 
-## Phase A — Console foundation (Electron MVP)
+## Phase MVP — Ambient awareness of the existing four worktrees
+
+**Goal:** open ranch, see all four worktrees on one screen, know what each one is doing without context-switching, attach to any of them in an embedded terminal.
+
+**Hard constraint:** no new configuration. Hardcoded list of four worktrees (`max`, `jeffy`, `arnold`, `kesha`) at known paths. Ports read from each worktree's existing `.env.agent` file (created by citemed_web's current `make init-agent`). Compose stacks remain managed via `make` as today — ranch only **displays** stack state, it doesn't bring stacks up or down.
+
+### What each card on the grid shows
+
+For each of the four worktrees:
+
+1. **Identity** — agent name, worktree path
+2. **Branch state** — current branch, dirty/clean, commits ahead/behind `origin/develop`, last commit (sha + message + age)
+3. **Ticket** — derived from branch (`ECD-1234` from `feature/ECD-1234-foo`)
+4. **Topic** — auto-derived from latest user prompt or first non-empty TodoWrite item; editable inline
+5. **Live TODO state** — current TodoWrite list parsed from the active CC session transcript: completed / in-progress / pending counts plus the in-progress item's text
+6. **Last activity** — timestamp of last assistant message or tool call (`active 2m ago`, `idle 14m`)
+7. **CC session presence** — is `claude` running in a tmux session for this worktree? (running / detached / none)
+8. **Local ports** — `DJANGO_PORT` and `VITE_PORT` from `.env.agent`, with click-to-open-in-browser
+9. **Open PR** — branch's PR number + status if one exists (use existing `bb` integration)
+
+### What clicking a card does
+
+- Embedded terminal pane opens
+- Attaches to the agent's tmux session (`tmux new-session -A -s ranch-<agent>`) — if no session, creates one and runs `claude` inside it
+- Closing the pane detaches; closing the window keeps the tmux session alive
+
+### Issues
+
+- **MVP-1.** Hardcoded four-worktree config bridge — read each worktree's `.env.agent` for ports + read `~/.ranch/config.toml` for paths
+- **MVP-2.** Git state observer — branch, dirty, ahead/behind, last commit per worktree (polled, ~5s)
+- **MVP-3.** CC session transcript parser — find the active session JSONL for a worktree (already partially solved by `ranch/transcript.py`), extract latest TodoWrite state + last activity timestamp
+- **MVP-4.** CC process detection — is there a `claude` process attached to this worktree's tmux session?
+- **MVP-5.** Rich worktree grid card — pull the above together into the card UI (replaces the read-only A4 stub)
+- **MVP-6.** Embedded terminal attach via tmux — minimal subset of A6: `tmux new-session -A` against an existing session, no full PTY orchestration yet
+- **MVP-7.** Click-to-open-in-browser using ports from `.env.agent`
+
+### Explicit non-goals for MVP
+
+- No project registry (single hardcoded project)
+- No `ranch.project.toml` (no externalization)
+- No port allocation (ports already exist in `.env.agent`)
+- No docker compose lifecycle from the console (use `make` as today)
+- No autonomous dispatch
+- No "New session" modal — sessions are launched the way they are today (open terminal, run `claude`); ranch attaches to whatever's there
+- No event bus daemon — for MVP, the renderer polls the file system + git + transcript on a low cadence. The bus comes back when we move beyond polling.
+- No inbox — checkpoint-awaiting / PR-comment notifications come later
+
+### Acceptance for Phase MVP
+
+- Open ranch after lunch, see all four worktrees with current branch, current TODO, last activity, port, and CC session state
+- Click `max` → terminal attaches to max's tmux session running `claude`; close the pane → tmux keeps running
+- Click `:8003` → browser opens to max's Django app
+- Total time from "I want to know what jeffy was doing" to "I know" is < 3 seconds, no context switch into iTerm
+
+---
+
+## Phase A — Console foundation (full vision)
 
 The smallest lovable console: open ranch, see your repos, see your agents, dispatch an interactive session, and watch it.
 
-### A1. Electron app skeleton
-- TypeScript, Vite, electron-builder
-- Main process: project + agent registry loading, IPC bridge, native modules
-- Renderer: React or Solid (decide before issue is picked up)
-- Preload script with `contextBridge` for safe IPC surface
-- Single window, multi-pane layout
+> **Status note (2026-04-29):** A1 is in review (#35). A4/A5/A6 are subsumed into Phase MVP (above) and will land there with a richer card spec. A2 (event bus) is deferred until polling proves insufficient. A3 (project registry) and A7 (interactive dispatch UI) are deferred until multi-project support is needed.
+
+### A1. Electron app skeleton ✅ (PR #35)
+- Electron + Vite + React + strict TypeScript
+- Main process loads `~/.ranch/config.toml` and `~/.ranch/projects.toml`
+- Sandboxed preload with `contextBridge` exposing typed `window.ranch.*` IPC surface
+- Single-window four-pane shell (grid / terminal / inbox / memory)
 
 ### A2. RunEvent bus + schema
 - Unified `RunEvent` envelope: `{run_id, ts, kind, payload, source}`
@@ -152,6 +226,8 @@ The smallest lovable console: open ranch, see your repos, see your agents, dispa
 
 ## Phase B — Project config externalization
 
+> **Deferred until post-MVP.** The hardcoded four-worktree setup that MVP reads from is sufficient day-to-day. Phase B becomes critical when (a) we want to onboard a fifth agent without editing citemed_web's Makefile, or (b) we want to use ranch on a second repo (citesource, scrapers). Until then, MVP-1 reads existing `.env.agent` files directly — no externalization needed.
+
 Move per-project agent/port/worktree config out of application repos and into ranch.
 
 ### B1. `ranch.project.toml` schema + parser
@@ -184,6 +260,8 @@ Move per-project agent/port/worktree config out of application repos and into ra
 
 ## Phase C — Docker orchestration in console
 
+> **Deferred until post-MVP.** Stack lifecycle stays in `make` for MVP — ranch displays state but doesn't control it. Phase C is what turns ranch into a true docker management surface; valuable but not on the day-one critical path. Becomes a priority once the operator finds themselves frequently context-switching to `make` commands while using ranch.
+
 The docker pieces that today live in citemed_web's Makefile become first-class console features.
 
 ### C1. Per-project compose lifecycle
@@ -212,6 +290,8 @@ The docker pieces that today live in citemed_web's Makefile become first-class c
 ---
 
 ## Phase D — Autonomous dispatch backend
+
+> **Deferred until post-MVP.** The autonomous-mode killer use case (overnight build-fix loops) requires more infrastructure (event bus, supervision, CI watchers) than awareness MVP needs. Comes after Phase MVP proves the UX is right and after the SDK orchestrator has soaked through real use as the foundation.
 
 Second adapter onto the same event bus, for fire-and-forget overnight work.
 
@@ -325,24 +405,29 @@ When the console proves out, these become real concerns. Not before.
 
 ## Pickup order
 
-For someone joining this project, the dependency tree is roughly:
-
 ```
-A1 (Electron skeleton)
-  └─ A2 (event bus) ──────┬─ A4 (worktree grid)
-  └─ A3 (project registry) ┘
-                          ├─ A5 (hook publishers)
-                          │     └─ A6 (PTY + tmux)
-                          │           └─ A7 (interactive dispatch)
-                          │
-                          └─ B1 (project.toml) ─ B2 (ports) ─ B3 (lifecycle) ─ B4 (citemed_web migration)
-                                                                                    └─ C1..C4 (docker)
-                          
-A2 (event bus) ── D1 (SDK adapter) ─ D2 (supervision) ─ D3 (build-fix) ─ D4 (mode toggle)
-A2 (event bus) ── E1 (inbox) ─ E2 (status) ─ E3 (timeline) ─ E4 (notifications)
+✅ A1 (Electron skeleton, PR #35)
+    │
+    ├─ Phase MVP — ambient awareness  ← BUILD THIS NEXT
+    │   MVP-1 (config bridge: read .env.agent for hardcoded 4 worktrees)
+    │   MVP-2 (git state observer)
+    │   MVP-3 (CC transcript → live TodoWrite state)
+    │   MVP-4 (CC process + tmux session detection)
+    │   MVP-5 (rich worktree grid card UI)
+    │   MVP-6 (embedded terminal via tmux attach)
+    │   MVP-7 (open-in-browser using port from .env.agent)
+    │
+    └─ post-MVP (sequenced after MVP ships and soaks)
+        ├─ A2 (event bus)  ← when polling stops scaling
+        ├─ A3 (project registry) + A7 (dispatch UI)  ← when 2nd project arrives
+        ├─ B1..B4 (project config externalization)  ← when 5th agent / 2nd project arrives
+        ├─ C1..C4 (docker orchestration)  ← when make-context-switching becomes annoying
+        ├─ D1..D4 (autonomous mode)  ← after MVP ergonomics dial in
+        ├─ E1..E4 (inbox + timeline)  ← needs A2 (event bus)
+        └─ F1..F3 (memory panel)  ← opportunistic
 ```
 
-Phase A is the trunk. Phase B can run in parallel once A2 + A3 land. Phases C/D/E sit on top of A. Phase F is opportunistic. Phase G is deferred.
+**Phase MVP is the next thing built.** Everything else is real, queued, and intentional — but not on the day-one critical path. Each post-MVP phase has a concrete trigger (a real friction point) that should arise *during* MVP use; until that trigger fires, those phases stay deferred.
 
 ---
 
@@ -352,4 +437,4 @@ Ranch is an internal tool for the citemed team. If you're picking this up:
 
 1. Read `USAGE.md` for the current CLI reference.
 2. Run `pytest` to verify the test suite (58 tests).
-3. The highest-leverage next step is **A1 + A2 + A4** — the smallest console slice that demonstrates the architecture works end-to-end.
+3. The next thing built is **Phase MVP** — see the section above for the seven issues that compose it. Start with MVP-1 (config bridge) and MVP-3 (transcript parser) in parallel; they unblock MVP-5 (the card UI).
