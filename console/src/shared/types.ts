@@ -95,6 +95,34 @@ export interface SessionState {
   gitBranch?: string;
 }
 
+// ─── Terminal (MVP-6) ────────────────────────────────────────────────────
+
+export interface TerminalEnv {
+  tmuxAvailable: boolean;
+  tmuxPath?: string;
+}
+
+export type TerminalAttachResult =
+  | { ok: true; terminalId: string }
+  | { ok: false; reason: string };
+
+export interface TerminalDataEvent {
+  terminalId: string;
+  data: string;
+}
+
+export interface TerminalExitEvent {
+  terminalId: string;
+  exitCode: number;
+  signal: number | null;
+}
+
+/**
+ * Renderer-side subscription handle. Calling the function unsubscribes —
+ * standard React-effect-cleanup pattern.
+ */
+export type Unsubscribe = () => void;
+
 // ─── IPC surface ─────────────────────────────────────────────────────────
 
 export interface RanchApi {
@@ -104,6 +132,19 @@ export interface RanchApi {
   worktrees: {
     list: () => Promise<WorktreeBasics[]>;
     session: (agent: string) => Promise<SessionState>;
+  };
+  terminal: {
+    env: () => Promise<TerminalEnv>;
+    attach: (
+      agent: string,
+      cols?: number,
+      rows?: number,
+    ) => Promise<TerminalAttachResult>;
+    write: (terminalId: string, data: string) => Promise<void>;
+    resize: (terminalId: string, cols: number, rows: number) => Promise<void>;
+    detach: (terminalId: string) => Promise<void>;
+    onData: (handler: (event: TerminalDataEvent) => void) => Unsubscribe;
+    onExit: (handler: (event: TerminalExitEvent) => void) => Unsubscribe;
   };
   app: {
     version: () => Promise<string>;
