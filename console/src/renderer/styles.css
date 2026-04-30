@@ -985,6 +985,47 @@ body,
   color: var(--bg);
 }
 
+.automated__top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.automated__cleanup-btn {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.25rem 0.7rem;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.automated__cleanup-btn:hover:not(:disabled) {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.automated__cleanup-btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.automated__cleanup-result {
+  margin: 0.2rem 0 0;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.74rem;
+  color: var(--green);
+  background: rgba(92, 212, 122, 0.08);
+  border: 1px solid rgba(92, 212, 122, 0.3);
+  border-radius: 4px;
+}
+
 .automated__hint {
   margin: 0.1rem 0 0;
   font-size: 0.72rem;

@@ -328,9 +328,14 @@ export interface RanchApi {
     set: (agent: string, label: string) => Promise<AgentNote | null>;
   };
   runs: {
-    /** Read-only. Lifecycle controls go through the Python CLI for now. */
+    /** Read-only listing — lifecycle controls go through Python CLI for now. */
     list: (limit?: number) => Promise<RunRecord[]>;
     get: (id: number) => Promise<RunDetail | null>;
+    /**
+     * Mark stale/abandoned runs (active state, dead PID) as stopped.
+     * Returns the number of rows updated.
+     */
+    cleanupAbandoned: () => Promise<number>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
