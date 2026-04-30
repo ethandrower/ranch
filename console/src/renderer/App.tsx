@@ -283,19 +283,35 @@ const STATUS_ORDER: Record<RunStatus, number> = {
   queued: 4,
   done: 5,
   stopped: 6,
-  unknown: 7,
+  abandoned: 7,
+  unknown: 8,
 };
+
+/**
+ * "Active" = still demanding operator attention or actually doing work.
+ * Everything else (done / stopped / abandoned) is history.
+ */
+const ACTIVE_STATUSES: RunStatus[] = [
+  'awaiting_approval',
+  'blocked',
+  'working',
+  'planning',
+  'queued',
+];
+
+type RunFilter = 'active' | 'all';
 
 function AutomatedView(): JSX.Element {
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [filter, setFilter] = useState<RunFilter>('active');
 
   useEffect(() => {
     let cancelled = false;
     async function refresh(): Promise<void> {
       try {
-        const list = await window.ranch.runs.list(50);
+        const list = await window.ranch.runs.list(100);
         if (!cancelled) {
           setRuns(list);
           setError(null);
@@ -316,13 +332,17 @@ function AutomatedView(): JSX.Element {
 
   const sortedRuns = useMemo(() => {
     if (!runs) return null;
-    return [...runs].sort((a, b) => {
+    const filtered =
+      filter === 'active'
+        ? runs.filter((r) => ACTIVE_STATUSES.includes(r.status))
+        : runs;
+    return [...filtered].sort((a, b) => {
       const sa = STATUS_ORDER[a.status] ?? 99;
       const sb = STATUS_ORDER[b.status] ?? 99;
       if (sa !== sb) return sa - sb;
       return b.id - a.id;
     });
-  }, [runs]);
+  }, [runs, filter]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -332,27 +352,67 @@ function AutomatedView(): JSX.Element {
     return c;
   }, [runs]);
 
+  const activeCount = useMemo(() => {
+    if (!runs) return 0;
+    return runs.filter((r) => ACTIVE_STATUSES.includes(r.status)).length;
+  }, [runs]);
+
+  const totalCount = runs?.length ?? 0;
+
   return (
     <div className="automated">
       <div className="automated__top">
-        <h2>Automated runs</h2>
+        <div className="automated__top-row">
+          <h2>Automated runs</h2>
+          <div className="automated__filter">
+            <button
+              type="button"
+              className={`automated__filter-btn${filter === 'active' ? ' automated__filter-btn--active' : ''}`}
+              onClick={() => setFilter('active')}
+            >
+              Active · {activeCount}
+            </button>
+            <button
+              type="button"
+              className={`automated__filter-btn${filter === 'all' ? ' automated__filter-btn--active' : ''}`}
+              onClick={() => setFilter('all')}
+            >
+              All · {totalCount}
+            </button>
+          </div>
+        </div>
         <p className="automated__sub">
           Fire-and-forget Claude SDK sessions managed by the Python
-          orchestrator. Lifecycle controls (<code>approve</code>,{' '}
-          <code>reject</code>, <code>stop</code>) still happen via{' '}
-          <code>ranch &lt;cmd&gt; &lt;run_id&gt;</code> in your terminal — UI
-          buttons coming next.
+          orchestrator. Each row in this list is one historical{' '}
+          <code>ranch dispatch</code> invocation. Lifecycle controls (
+          <code>approve</code>, <code>reject</code>, <code>stop</code>) still
+          happen via <code>ranch &lt;cmd&gt; &lt;run_id&gt;</code> in your
+          terminal — UI buttons coming next.
         </p>
+        {filter === 'active' && (
+          <p className="automated__hint">
+            Showing only <em>active</em> runs (waiting on you, working,
+            planning, queued). Toggle <strong>All</strong> to see history,
+            including <em>abandoned</em> runs whose orchestrator process is no
+            longer alive.
+          </p>
+        )}
         <div className="automated__counts">
-          {Object.entries(counts).map(([status, n]) => (
-            <span
-              key={status}
-              className={`pill run-pill run-pill--${status}`}
-              title={`${n} ${status.replace('_', ' ')}`}
-            >
-              {statusLabel(status as RunStatus)} · {n}
-            </span>
-          ))}
+          {Object.entries(counts)
+            .sort(
+              ([a], [b]) =>
+                (STATUS_ORDER[a as RunStatus] ?? 99) -
+                (STATUS_ORDER[b as RunStatus] ?? 99),
+            )
+            .map(([status, n]) => (
+              <span
+                key={status}
+                className={`pill run-pill run-pill--${status}`}
+                title={`${n} ${status.replace('_', ' ')}`}
+              >
+                {statusLabel(status as RunStatus)} · {n}
+              </span>
+            ))}
         </div>
       </div>
 
@@ -368,11 +428,21 @@ function AutomatedView(): JSX.Element {
 
       {sortedRuns && sortedRuns.length === 0 && (
         <div className="placeholder">
-          No automated runs yet. Dispatch one from a terminal:
-          <pre className="automated__empty-hint">
-            ranch dispatch &lt;agent&gt; --ticket &lt;ID&gt; --brief
-            &quot;...&quot;
-          </pre>
+          {filter === 'active' && totalCount > 0 ? (
+            <>
+              No active runs right now. {totalCount} historical{' '}
+              {totalCount === 1 ? 'run' : 'runs'} in the DB — toggle{' '}
+              <strong>All</strong> above to see them.
+            </>
+          ) : (
+            <>
+              No automated runs yet. Dispatch one from a terminal:
+              <pre className="automated__empty-hint">
+                ranch dispatch &lt;agent&gt; --ticket &lt;ID&gt; --brief
+                &quot;...&quot;
+              </pre>
+            </>
+          )}
         </div>
       )}
 
@@ -432,6 +502,17 @@ function RunCard({
       <p className="run-card__brief">
         {run.brief || <em className="run-card__brief-empty">no brief</em>}
       </p>
+      {run.status === 'abandoned' && (
+        <p className="run-card__zombie">
+          orchestrator state is <code>{run.rawState}</code> but the process{' '}
+          {run.pid !== undefined ? (
+            <>(PID {run.pid}) is no longer alive</>
+          ) : (
+            'has no recorded PID'
+          )}
+          .
+        </p>
+      )}
       <footer className="run-card__foot">
         <span className="run-card__age">
           {run.endedAt ? `ended ${ageStr} ago` : `started ${ageStr} ago`}
@@ -482,6 +563,8 @@ function statusLabel(status: RunStatus): string {
   switch (status) {
     case 'awaiting_approval':
       return 'needs approval';
+    case 'abandoned':
+      return 'abandoned';
     case 'unknown':
       return '?';
     default:

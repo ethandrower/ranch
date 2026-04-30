@@ -212,6 +212,7 @@ export type RunStatus =
   | 'done'
   | 'stopped'
   | 'blocked'
+  | 'abandoned'
   | 'unknown';
 
 export interface RunRecord {
@@ -228,6 +229,13 @@ export interface RunRecord {
   dispatchMode: 'foreground' | 'background';
   prUrl?: string;
   pid?: number;
+  /**
+   * Was the recorded PID still a live process at snapshot time?
+   *   true  — process exists and answers signal 0
+   *   false — pid was set but the process is gone (zombie)
+   *   undefined — no pid recorded for this run
+   */
+  pidAlive?: boolean;
   logPath?: string;
   branchName?: string;
 }
