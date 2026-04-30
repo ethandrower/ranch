@@ -47,6 +47,7 @@ export function App(): JSX.Element {
   const [notes, setNotes] = useState<Record<string, AgentNote>>({});
   const [focusedAgent, setFocusedAgent] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
+  const [mode, setMode] = useState<'interactive' | 'automated'>('interactive');
 
   // ─── one-shot loads ────────────────────────────────────────
   useEffect(() => {
@@ -161,67 +162,221 @@ export function App(): JSX.Element {
     <div className="app">
       <header className="app__header">
         <h1>Ranch</h1>
+        <ModeTabs mode={mode} onChange={setMode} />
         <span className="app__version">
           {state.appVersion ? `v${state.appVersion}` : ''}
         </span>
         <FleetWarnings snapshot={processSnapshot} />
-        {terminalEnv && !terminalEnv.tmuxAvailable && (
-          <span className="app__warn">
-            ⚠ tmux not found — install with <code>brew install tmux</code>
-          </span>
+        {mode === 'interactive' &&
+          terminalEnv &&
+          !terminalEnv.tmuxAvailable && (
+            <span className="app__warn">
+              ⚠ tmux not found — install with <code>brew install tmux</code>
+            </span>
+          )}
+        {mode === 'interactive' && (
+          <button
+            type="button"
+            className={`sidebar-toggle${sidebarOpen ? ' sidebar-toggle--open' : ''}`}
+            onClick={() => setSidebarOpen((v) => !v)}
+            title={sidebarOpen ? 'Hide detail sidebar' : 'Show detail sidebar'}
+          >
+            {sidebarOpen ? 'Hide details ›' : '‹ Details'}
+          </button>
         )}
-        <button
-          type="button"
-          className={`sidebar-toggle${sidebarOpen ? ' sidebar-toggle--open' : ''}`}
-          onClick={() => setSidebarOpen((v) => !v)}
-          title={sidebarOpen ? 'Hide detail sidebar' : 'Show detail sidebar'}
-        >
-          {sidebarOpen ? 'Hide details ›' : '‹ Details'}
-        </button>
       </header>
-      <div className={`app__body${sidebarOpen ? ' app__body--sidebar' : ''}`}>
-        <main className="app__grid">
-          {state.status === 'loading' && (
-            <p className="placeholder">Loading worktrees…</p>
-          )}
-          {state.status === 'error' && (
-            <p className="placeholder placeholder--error">
-              Error: {state.error}
-            </p>
-          )}
-          {state.status === 'ready' &&
-            state.worktrees.map((wt) => (
-              <AgentCell
-                key={wt.agent}
-                worktree={wt}
-                processState={processSnapshot.perAgent[wt.agent] ?? null}
-                note={notes[wt.agent] ?? null}
-                terminalEnv={terminalEnv}
-                focused={focusedAgent === wt.agent}
-                onFocus={() => setFocusedAgent(wt.agent)}
-                onSaveNote={(label) => saveNote(wt.agent, label)}
-              />
-            ))}
-        </main>
-        {sidebarOpen && (
-          <aside className="sidebar">
-            {focusedWorktree ? (
-              <AgentDetail
-                worktree={focusedWorktree}
-                processState={
-                  processSnapshot.perAgent[focusedWorktree.agent] ?? null
-                }
-                note={notes[focusedWorktree.agent] ?? null}
-              />
-            ) : (
-              <p className="placeholder">
-                Click a cell to see its detail here.
+      {mode === 'interactive' ? (
+        <div className={`app__body${sidebarOpen ? ' app__body--sidebar' : ''}`}>
+          <main className="app__grid">
+            {state.status === 'loading' && (
+              <p className="placeholder">Loading worktrees…</p>
+            )}
+            {state.status === 'error' && (
+              <p className="placeholder placeholder--error">
+                Error: {state.error}
               </p>
             )}
-          </aside>
-        )}
+            {state.status === 'ready' &&
+              state.worktrees.map((wt) => (
+                <AgentCell
+                  key={wt.agent}
+                  worktree={wt}
+                  processState={processSnapshot.perAgent[wt.agent] ?? null}
+                  note={notes[wt.agent] ?? null}
+                  terminalEnv={terminalEnv}
+                  focused={focusedAgent === wt.agent}
+                  onFocus={() => setFocusedAgent(wt.agent)}
+                  onSaveNote={(label) => saveNote(wt.agent, label)}
+                />
+              ))}
+          </main>
+          {sidebarOpen && (
+            <aside className="sidebar">
+              {focusedWorktree ? (
+                <AgentDetail
+                  worktree={focusedWorktree}
+                  processState={
+                    processSnapshot.perAgent[focusedWorktree.agent] ?? null
+                  }
+                  note={notes[focusedWorktree.agent] ?? null}
+                />
+              ) : (
+                <p className="placeholder">
+                  Click a cell to see its detail here.
+                </p>
+              )}
+            </aside>
+          )}
+        </div>
+      ) : (
+        <AutomatedView />
+      )}
+    </div>
+  );
+}
+
+// ─── Mode tabs ────────────────────────────────────────────────
+
+function ModeTabs({
+  mode,
+  onChange,
+}: {
+  mode: 'interactive' | 'automated';
+  onChange: (mode: 'interactive' | 'automated') => void;
+}): JSX.Element {
+  return (
+    <div className="mode-tabs" role="tablist">
+      <button
+        role="tab"
+        aria-selected={mode === 'interactive'}
+        type="button"
+        className={`mode-tab${mode === 'interactive' ? ' mode-tab--active' : ''}`}
+        onClick={() => onChange('interactive')}
+      >
+        Interactive
+      </button>
+      <button
+        role="tab"
+        aria-selected={mode === 'automated'}
+        type="button"
+        className={`mode-tab${mode === 'automated' ? ' mode-tab--active' : ''}`}
+        onClick={() => onChange('automated')}
+      >
+        Automated
+      </button>
+    </div>
+  );
+}
+
+// ─── AutomatedView (stub) ─────────────────────────────────────
+
+function AutomatedView(): JSX.Element {
+  return (
+    <div className="automated">
+      <div className="automated__intro">
+        <h2>Automated runs</h2>
+        <p>
+          Fire-and-forget Claude SDK sessions running in the background. Each
+          run shows up as a card here with its current status —{' '}
+          <em>planning</em>, <em>working</em>, <em>awaiting approval</em>,{' '}
+          <em>done</em>, or <em>blocked</em>. The console bubbles up which ones
+          need your input or review so nothing falls through.
+        </p>
+        <p className="automated__hint">
+          The Python orchestrator already powers this — see{' '}
+          <code>ranch dispatch</code>, <code>ranch runs</code>,{' '}
+          <code>ranch approve</code>. Wiring that data into this view is the
+          next PR.
+        </p>
+      </div>
+
+      <div className="automated__demo">
+        <h3>What the run cards will look like</h3>
+        <div className="automated__cards">
+          <DemoRunCard
+            agent="max"
+            ticket="ECD-1234"
+            brief="Add /healthz endpoint with status checks"
+            status="awaiting_approval"
+            ageMin={2}
+          />
+          <DemoRunCard
+            agent="jeffy"
+            ticket="ECD-9988"
+            brief="Migrate legacy export job to celery beat"
+            status="working"
+            ageMin={14}
+          />
+          <DemoRunCard
+            agent="arnold"
+            ticket="ECD-1471"
+            brief="Fix flaky test_export_csv"
+            status="done"
+            ageMin={37}
+          />
+          <DemoRunCard
+            agent="kesha"
+            ticket="ECD-1502"
+            brief="Investigate slow AE-table query"
+            status="blocked"
+            ageMin={62}
+          />
+        </div>
       </div>
     </div>
+  );
+}
+
+function DemoRunCard({
+  agent,
+  ticket,
+  brief,
+  status,
+  ageMin,
+}: {
+  agent: string;
+  ticket: string;
+  brief: string;
+  status: 'planning' | 'working' | 'awaiting_approval' | 'done' | 'blocked';
+  ageMin: number;
+}): JSX.Element {
+  return (
+    <article className={`run-card run-card--${status}`}>
+      <header className="run-card__head">
+        <span className="run-card__agent">{agent}</span>
+        <span className="run-card__ticket">{ticket}</span>
+        <RunStatusPill status={status} />
+      </header>
+      <p className="run-card__brief">{brief}</p>
+      <footer className="run-card__foot">
+        <span className="run-card__age">last update {ageMin}m ago</span>
+        {status === 'awaiting_approval' && (
+          <span className="run-card__action-hint">click to review →</span>
+        )}
+        {status === 'blocked' && (
+          <span className="run-card__action-hint">needs unblock →</span>
+        )}
+      </footer>
+    </article>
+  );
+}
+
+function RunStatusPill({
+  status,
+}: {
+  status: 'planning' | 'working' | 'awaiting_approval' | 'done' | 'blocked';
+}): JSX.Element {
+  const labels = {
+    planning: 'planning',
+    working: 'working',
+    awaiting_approval: 'needs approval',
+    done: 'done',
+    blocked: 'blocked',
+  };
+  return (
+    <span className={`pill run-pill run-pill--${status}`}>
+      {labels[status]}
+    </span>
   );
 }
 
