@@ -92,6 +92,67 @@ export async function stopRun(id: number): Promise<void> {
   await runRanchCli(['stop', String(id)]);
 }
 
+export interface DispatchOptions {
+  agent: string;
+  ticket: string;
+  brief: string;
+  free?: boolean;
+  autoApprove?: boolean;
+}
+
+export interface DispatchResult {
+  ok: boolean;
+  runId?: number;
+  output: string;
+}
+
+/** Parse "Dispatched run #42 (...)" or similar from the CLI's stdout. */
+function extractRunId(output: string): number | undefined {
+  const m = /(?:run\s*#?|#)(\d+)/i.exec(output);
+  if (m) {
+    const id = Number.parseInt(m[1]!, 10);
+    if (Number.isFinite(id) && id > 0) return id;
+  }
+  return undefined;
+}
+
+export async function dispatchRun(
+  opts: DispatchOptions,
+): Promise<DispatchResult> {
+  if (!opts.agent || !opts.ticket || !opts.brief.trim()) {
+    return {
+      ok: false,
+      output: 'agent, ticket, and brief are all required',
+    };
+  }
+  const args = [
+    'dispatch',
+    opts.agent,
+    '--ticket',
+    opts.ticket,
+    '--brief',
+    opts.brief,
+  ];
+  if (opts.free) args.push('--free');
+  if (opts.autoApprove) args.push('--auto-approve');
+
+  try {
+    const { stdout } = await runRanchCli(args);
+    const result: DispatchResult = { ok: true, output: stdout };
+    const runId = extractRunId(stdout);
+    if (runId !== undefined) result.runId = runId;
+    return result;
+  } catch (err) {
+    const stderr =
+      err && typeof err === 'object' && 'stderr' in err
+        ? String((err as { stderr: unknown }).stderr ?? '')
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, output: stderr };
+  }
+}
+
 async function query(sql: string): Promise<unknown[]> {
   if (!existsSync(DB_PATH)) return [];
   const { stdout } = await execFile('/usr/bin/sqlite3', [

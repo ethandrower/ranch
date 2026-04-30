@@ -1074,6 +1074,26 @@ body,
   gap: 0.5rem;
 }
 
+.automated__dispatch-btn {
+  background: rgba(106, 162, 255, 0.15);
+  color: var(--accent);
+  border: 1px solid rgba(106, 162, 255, 0.4);
+  border-radius: 6px;
+  padding: 0.3rem 0.85rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.automated__dispatch-btn:hover {
+  background: rgba(106, 162, 255, 0.22);
+  border-color: var(--accent);
+}
+
 .automated__cleanup-btn {
   background: var(--bg);
   color: var(--text-muted);
@@ -1442,6 +1462,99 @@ body,
 .docker-actions {
   display: flex;
   gap: 0.4rem;
+}
+
+/* ─── Dispatch form (modal) ─────────────────────────── */
+
+.dispatch-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.dispatch-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.dispatch-form__label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.dispatch-form__input {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+}
+
+.dispatch-form__input:focus {
+  border-color: var(--accent);
+}
+
+.dispatch-form__input--textarea {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  resize: vertical;
+  min-height: 6rem;
+  line-height: 1.5;
+}
+
+.dispatch-form__toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dispatch-form__toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem;
+  align-items: start;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.dispatch-form__toggle input {
+  margin-top: 0.2rem;
+}
+
+.dispatch-form__toggle strong {
+  color: var(--text);
+}
+
+.dispatch-form__error {
+  margin: 0;
+  background: rgba(255, 106, 106, 0.08);
+  color: var(--red);
+  border: 1px solid rgba(255, 106, 106, 0.3);
+  border-radius: 4px;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.72rem;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.dispatch-form__buttons {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
 }
 
 .detail__pr-link {

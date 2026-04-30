@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type FormEvent,
   type ReactNode,
 } from 'react';
 import type {
@@ -358,6 +359,17 @@ function AutomatedView(): JSX.Element {
   const [filter, setFilter] = useState<RunFilter>('active');
   const [cleaningUp, setCleaningUp] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
+
+  async function refreshList(): Promise<void> {
+    try {
+      const list = await window.ranch.runs.list(100);
+      setRuns(list);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -447,6 +459,14 @@ function AutomatedView(): JSX.Element {
         <div className="automated__top-row">
           <h2>Automated runs</h2>
           <div className="automated__top-actions">
+            <button
+              type="button"
+              className="automated__dispatch-btn"
+              onClick={() => setDispatchOpen(true)}
+              title="Dispatch a new automated run via ranch dispatch"
+            >
+              + New automated run
+            </button>
             {abandonedCount > 0 && (
               <button
                 type="button"
@@ -565,6 +585,202 @@ function AutomatedView(): JSX.Element {
           onClose={() => setSelectedId(null)}
         />
       )}
+
+      {dispatchOpen && (
+        <DispatchModal
+          onClose={() => setDispatchOpen(false)}
+          onDispatched={() => {
+            setDispatchOpen(false);
+            void refreshList();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Dispatch modal ───────────────────────────────────────────
+
+function DispatchModal({
+  onClose,
+  onDispatched,
+}: {
+  onClose: () => void;
+  onDispatched: (runId?: number) => void;
+}): JSX.Element {
+  const [agents, setAgents] = useState<string[] | null>(null);
+  const [agent, setAgent] = useState<string>('');
+  const [ticket, setTicket] = useState('');
+  const [brief, setBrief] = useState('');
+  const [free, setFree] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Pull registered agents so the operator picks from a list, not types
+  // a name and risks a typo.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cfg = await window.ranch.config.get();
+        if (cancelled) return;
+        const names = cfg.agents.map((a) => a.name);
+        setAgents(names);
+        if (names[0]) setAgent(names[0]);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function submit(e: FormEvent): Promise<void> {
+    e.preventDefault();
+    if (busy) return;
+    if (!agent || !ticket.trim() || !brief.trim()) {
+      setError('agent, ticket, and brief are all required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await window.ranch.runs.dispatch({
+        agent,
+        ticket: ticket.trim(),
+        brief: brief.trim(),
+        free,
+        autoApprove,
+      });
+      if (!result.ok) {
+        const tail = result.output.trim().slice(-400);
+        setError(tail || 'dispatch failed (no output)');
+        return;
+      }
+      onDispatched(result.runId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="run-modal__backdrop" onClick={onClose}>
+      <div className="run-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="run-modal__head">
+          <h3>New automated run</h3>
+          <button
+            type="button"
+            className="run-modal__close"
+            onClick={onClose}
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </header>
+        <form className="run-modal__body dispatch-form" onSubmit={submit}>
+          <label className="dispatch-form__field">
+            <span className="dispatch-form__label">Agent</span>
+            {agents === null ? (
+              <span className="placeholder">loading…</span>
+            ) : agents.length === 0 ? (
+              <span className="placeholder placeholder--error">
+                No agents registered in ~/.ranch/config.toml
+              </span>
+            ) : (
+              <select
+                value={agent}
+                onChange={(e) => setAgent(e.target.value)}
+                disabled={busy}
+                className="dispatch-form__input"
+              >
+                {agents.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+
+          <label className="dispatch-form__field">
+            <span className="dispatch-form__label">Ticket</span>
+            <input
+              type="text"
+              value={ticket}
+              onChange={(e) => setTicket(e.target.value)}
+              placeholder="ECD-1234"
+              disabled={busy}
+              className="dispatch-form__input"
+              autoFocus
+            />
+          </label>
+
+          <label className="dispatch-form__field">
+            <span className="dispatch-form__label">Brief</span>
+            <textarea
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              placeholder="What should the agent do? Plain text or markdown."
+              disabled={busy}
+              rows={6}
+              className="dispatch-form__input dispatch-form__input--textarea"
+            />
+          </label>
+
+          <div className="dispatch-form__toggles">
+            <label className="dispatch-form__toggle">
+              <input
+                type="checkbox"
+                checked={free}
+                onChange={(e) => setFree(e.target.checked)}
+                disabled={busy}
+              />
+              <span>
+                <strong>Free mode</strong> — skip the plan→push checkpoint
+                workflow. The brief becomes the whole instruction.
+              </span>
+            </label>
+            <label className="dispatch-form__toggle">
+              <input
+                type="checkbox"
+                checked={autoApprove}
+                onChange={(e) => setAutoApprove(e.target.checked)}
+                disabled={busy}
+              />
+              <span>
+                <strong>Auto-approve</strong> — auto-approve every checkpoint.
+                Use with care; combine with free mode for fully unattended.
+              </span>
+            </label>
+          </div>
+
+          {error && <pre className="dispatch-form__error">{error}</pre>}
+
+          <div className="dispatch-form__buttons">
+            <button
+              type="button"
+              className="run-action"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="run-action run-action--approve"
+              disabled={busy || agents === null || agents.length === 0}
+            >
+              {busy ? 'Dispatching…' : 'Dispatch'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
