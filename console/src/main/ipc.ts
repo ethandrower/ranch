@@ -36,7 +36,9 @@ import {
   rejectRun,
   noteRun,
   stopRun,
+  dispatchRun,
 } from './runs.js';
+import type { DispatchOptions } from '../shared/types.js';
 import {
   attachTerminal,
   detachTerminal,
@@ -62,6 +64,7 @@ export const IPC_CHANNELS = {
   runsReject: 'ranch:runs:reject',
   runsNote: 'ranch:runs:note',
   runsStop: 'ranch:runs:stop',
+  runsDispatch: 'ranch:runs:dispatch',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -179,6 +182,29 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.runsStop, async (_event, id: unknown) => {
     if (typeof id !== 'number') throw new Error('runs.stop needs id');
     await stopRun(id);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.runsDispatch, async (_event, opts: unknown) => {
+    if (typeof opts !== 'object' || opts === null) {
+      throw new Error('runs.dispatch needs an options object');
+    }
+    const o = opts as Partial<DispatchOptions>;
+    if (typeof o.agent !== 'string' || !o.agent.trim()) {
+      throw new Error('runs.dispatch needs agent');
+    }
+    if (typeof o.ticket !== 'string' || !o.ticket.trim()) {
+      throw new Error('runs.dispatch needs ticket');
+    }
+    if (typeof o.brief !== 'string' || !o.brief.trim()) {
+      throw new Error('runs.dispatch needs brief');
+    }
+    return dispatchRun({
+      agent: o.agent,
+      ticket: o.ticket,
+      brief: o.brief,
+      free: o.free === true,
+      autoApprove: o.autoApprove === true,
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.terminalEnv, async () => getTerminalEnv());

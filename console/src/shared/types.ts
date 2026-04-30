@@ -301,6 +301,22 @@ export interface RunDetail extends RunRecord {
   interjections: RunInterjection[];
 }
 
+export interface DispatchOptions {
+  agent: string;
+  ticket: string;
+  brief: string;
+  free?: boolean;
+  autoApprove?: boolean;
+}
+
+export interface DispatchResult {
+  ok: boolean;
+  /** Parsed from CLI stdout, when matchable. */
+  runId?: number;
+  /** stdout on success, stderr on failure. */
+  output: string;
+}
+
 // ─── Terminal (MVP-6) ────────────────────────────────────────────────────
 
 export interface TerminalEnv {
@@ -374,6 +390,7 @@ export interface RanchApi {
     reject: (id: number, reason?: string) => Promise<void>;
     note: (id: number, text: string) => Promise<void>;
     stop: (id: number) => Promise<void>;
+    dispatch: (opts: DispatchOptions) => Promise<DispatchResult>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
