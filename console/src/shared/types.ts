@@ -272,6 +272,8 @@ export interface RanchApi {
     version: () => Promise<string>;
     /** Open a path in the OS file manager. */
     revealInFinder: (path: string) => Promise<void>;
+    /** Open a URL in the user's default browser (or whatever shell handles it). */
+    openExternal: (url: string) => Promise<void>;
   };
 }
 
