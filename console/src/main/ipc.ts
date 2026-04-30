@@ -13,7 +13,7 @@
  * stay in sync — easy to grep, easy to keep small.
  */
 
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, shell } from 'electron';
 import { loadRanchConfig } from './config.js';
 import { listWorktrees } from './worktrees.js';
 import { getActiveSession } from './transcript.js';
@@ -43,6 +43,7 @@ export const IPC_CHANNELS = {
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
   appVersion: 'ranch:app:version',
+  appRevealInFinder: 'ranch:app:revealInFinder',
 } as const;
 
 export function registerIpcHandlers(): void {
@@ -85,7 +86,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.terminalAttach,
-    async (event, agent: unknown, cols: unknown, rows: unknown) => {
+    async (event, agent: unknown, opts: unknown) => {
       if (typeof agent !== 'string' || !agent) {
         throw new Error('terminal.attach requires an agent name');
       }
@@ -94,11 +95,15 @@ export function registerIpcHandlers(): void {
       if (!match) {
         throw new Error(`Unknown agent: ${agent}`);
       }
+      const o = (opts as Record<string, unknown> | undefined) ?? {};
       return attachTerminal({
         agent,
         worktreePath: match.worktree,
-        ...(typeof cols === 'number' ? { cols } : {}),
-        ...(typeof rows === 'number' ? { rows } : {}),
+        ...(typeof o['cols'] === 'number' ? { cols: o['cols'] as number } : {}),
+        ...(typeof o['rows'] === 'number' ? { rows: o['rows'] as number } : {}),
+        ...(typeof o['command'] === 'string' && o['command']
+          ? { command: o['command'] as string }
+          : {}),
         webContents: event.sender,
       });
     },
@@ -131,4 +136,12 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion());
+
+  ipcMain.handle(IPC_CHANNELS.appRevealInFinder, (_event, path: unknown) => {
+    if (typeof path !== 'string' || !path) return;
+    // showItemInFolder reveals the path in Finder (selecting the item itself
+    // if it's a file, or showing the directory). Safer than openPath which
+    // would try to "open" the directory in whatever the default handler is.
+    shell.showItemInFolder(path);
+  });
 }

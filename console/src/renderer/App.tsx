@@ -340,7 +340,16 @@ function WorktreeCard({
           error={sessionError}
         />
       </header>
-      <p className="card__path">{worktree.worktreePath}</p>
+      <button
+        className="card__path"
+        onClick={() => {
+          void navigator.clipboard.writeText(worktree.worktreePath);
+        }}
+        title="Copy path"
+        type="button"
+      >
+        {worktree.worktreePath}
+      </button>
 
       <div className="card__divider" />
 
@@ -367,16 +376,25 @@ function WorktreeCard({
       {/* Actions */}
       <footer className="card__actions">
         <button
-          className="card__action"
+          className="card__action card__action--primary"
           onClick={() => onOpenTerminal(worktree.agent)}
           disabled={terminalEnv !== null && !terminalEnv.tmuxAvailable}
           title={
             terminalEnv && !terminalEnv.tmuxAvailable
               ? 'tmux not installed'
-              : 'Attach an embedded terminal to this worktree'
+              : `Open ${worktree.agent}'s embedded terminal — launches Claude on first open, attaches afterward`
           }
         >
-          Open terminal
+          Open Claude
+        </button>
+        <button
+          className="card__action"
+          onClick={() => {
+            void window.ranch.app.revealInFinder(worktree.worktreePath);
+          }}
+          title="Reveal worktree in Finder"
+        >
+          Reveal
         </button>
       </footer>
     </article>

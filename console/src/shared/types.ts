@@ -160,6 +160,19 @@ export type TerminalAttachResult =
   | { ok: true; terminalId: string }
   | { ok: false; reason: string };
 
+/** Renderer-side options for ranch.terminal.attach. */
+export interface TerminalAttachOptions {
+  cols?: number;
+  rows?: number;
+  /**
+   * Command to run inside the tmux session if it's being newly created.
+   * Ignored if the session already exists (tmux -A semantics). Use this
+   * to launch `claude` immediately on first open, while still attaching
+   * cleanly on subsequent opens.
+   */
+  command?: string;
+}
+
 export interface TerminalDataEvent {
   terminalId: string;
   data: string;
@@ -194,8 +207,7 @@ export interface RanchApi {
     env: () => Promise<TerminalEnv>;
     attach: (
       agent: string,
-      cols?: number,
-      rows?: number,
+      opts?: TerminalAttachOptions,
     ) => Promise<TerminalAttachResult>;
     write: (terminalId: string, data: string) => Promise<void>;
     resize: (terminalId: string, cols: number, rows: number) => Promise<void>;
@@ -205,6 +217,8 @@ export interface RanchApi {
   };
   app: {
     version: () => Promise<string>;
+    /** Open a path in the OS file manager. */
+    revealInFinder: (path: string) => Promise<void>;
   };
 }
 

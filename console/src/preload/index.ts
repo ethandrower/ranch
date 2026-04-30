@@ -37,6 +37,7 @@ const IPC_CHANNELS = {
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
   appVersion: 'ranch:app:version',
+  appRevealInFinder: 'ranch:app:revealInFinder',
 } as const;
 
 /**
@@ -71,8 +72,8 @@ const api: RanchApi = {
   },
   terminal: {
     env: () => ipcRenderer.invoke(IPC_CHANNELS.terminalEnv),
-    attach: (agent, cols, rows) =>
-      ipcRenderer.invoke(IPC_CHANNELS.terminalAttach, agent, cols, rows),
+    attach: (agent, opts) =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalAttach, agent, opts ?? {}),
     write: (terminalId, data) =>
       ipcRenderer.invoke(IPC_CHANNELS.terminalWrite, terminalId, data),
     resize: (terminalId, cols, rows) =>
@@ -86,6 +87,8 @@ const api: RanchApi = {
   },
   app: {
     version: () => ipcRenderer.invoke(IPC_CHANNELS.appVersion),
+    revealInFinder: (path) =>
+      ipcRenderer.invoke(IPC_CHANNELS.appRevealInFinder, path),
   },
 };
 

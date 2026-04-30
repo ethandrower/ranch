@@ -92,6 +92,13 @@ interface AttachOptions {
   cols?: number;
   rows?: number;
   webContents: WebContents;
+  /**
+   * Command to run inside the tmux session if it doesn't already exist.
+   * tmux's `-A` flag (attach-or-create) ignores command args when the
+   * session is already running, so this only affects fresh sessions —
+   * exactly what we want.
+   */
+  command?: string;
 }
 
 export async function attachTerminal(
@@ -127,7 +134,10 @@ export async function attachTerminal(
   //   -A  attach if a session by this name exists, else create
   //   -s  session name
   //   -c  start directory (only used when creating a new session)
+  //   final positional COMMAND (if given) only runs when creating;
+  //   ignored when attaching to existing session
   const args = ['new-session', '-A', '-s', terminalId, '-c', opts.worktreePath];
+  if (opts.command) args.push(opts.command);
 
   const pty = ptySpawn(tmuxPath, args, {
     name: 'xterm-256color',

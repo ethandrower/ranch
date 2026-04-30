@@ -97,13 +97,16 @@ export function Terminal({ agent, generation }: TerminalProps): JSX.Element {
       }
     });
 
-    // 4. Attach.
+    // 4. Attach. We pass `command: 'claude'` so that if the tmux session
+    //    is being newly created (no existing ranch-<agent>), it launches
+    //    straight into claude. tmux's -A flag ignores the command when
+    //    attaching to an existing session, so this is no-op for re-attach.
     void (async () => {
-      const result = await window.ranch.terminal.attach(
-        agent,
-        initialCols,
-        initialRows,
-      );
+      const result = await window.ranch.terminal.attach(agent, {
+        cols: initialCols,
+        rows: initialRows,
+        command: 'claude',
+      });
       if (disposed) {
         if (result.ok) {
           void window.ranch.terminal.detach(result.terminalId);
