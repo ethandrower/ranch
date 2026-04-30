@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  AgentNote,
   CCProcessState,
   ProcessSnapshot,
   SessionState,
   TerminalEnv,
-  TodoItem,
   WorktreeBasics,
   WorktreeGitState,
 } from '../shared/types.js';
@@ -20,6 +20,7 @@ const SESSION_POLL_MS = 4000;
 const PROCESS_POLL_MS = 5000;
 const GIT_POLL_MS = 8000;
 const WORKTREE_POLL_MS = 30_000;
+const NOTES_POLL_MS = 15_000;
 
 interface AppState {
   status: 'loading' | 'ready' | 'error';
@@ -28,24 +29,18 @@ interface AppState {
   error?: string;
 }
 
-interface ActiveTerminal {
-  agent: string;
-  /** Bumped on each (re-)open to force a fresh attach. */
-  generation: number;
-}
-
 export function App(): JSX.Element {
   const [state, setState] = useState<AppState>({
     status: 'loading',
     worktrees: [],
   });
-  const [activeTerminal, setActiveTerminal] = useState<ActiveTerminal | null>(
-    null,
-  );
   const [terminalEnv, setTerminalEnv] = useState<TerminalEnv | null>(null);
   const [processSnapshot, setProcessSnapshot] =
     useState<ProcessSnapshot>(EMPTY_SNAPSHOT);
+  const [notes, setNotes] = useState<Record<string, AgentNote>>({});
+  const [focusedAgent, setFocusedAgent] = useState<string | null>(null);
 
+  // ─── one-shot loads ────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     void window.ranch.terminal.env().then((env) => {
@@ -56,31 +51,10 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  // Fleet-wide process snapshot (one ps + one tmux-list per tick, all agents).
-  // Cheaper than per-card polling and gives us cross-worktree consistency.
+  // ─── worktree list (slow refresh) ──────────────────────────
   useEffect(() => {
     let cancelled = false;
-    async function refresh(): Promise<void> {
-      try {
-        const snap = await window.ranch.worktrees.processSnapshot();
-        if (!cancelled) setProcessSnapshot(snap);
-      } catch {
-        // tmux/ps errors are surfaced indirectly (empty snapshot)
-      }
-    }
-    void refresh();
-    const handle = setInterval(refresh, PROCESS_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(handle);
-    };
-  }, []);
-
-  // Initial load + slow refresh of worktree basics (.env.agent rarely changes).
-  useEffect(() => {
-    let cancelled = false;
-
-    async function refreshWorktrees(initial = false): Promise<void> {
+    async function refresh(initial = false): Promise<void> {
       try {
         const worktrees = await window.ranch.worktrees.list();
         if (cancelled) return;
@@ -101,29 +75,74 @@ export function App(): JSX.Element {
         }
       }
     }
-
-    void refreshWorktrees(true);
-    const handle = setInterval(() => {
-      void refreshWorktrees(false);
-    }, WORKTREE_POLL_MS);
-
+    void refresh(true);
+    const handle = setInterval(() => void refresh(false), WORKTREE_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(handle);
     };
   }, []);
 
-  function openTerminal(agent: string): void {
-    setActiveTerminal((prev) =>
-      prev?.agent === agent
-        ? { agent, generation: prev.generation + 1 }
-        : { agent, generation: 1 },
-    );
-  }
+  // ─── process snapshot (fleet-wide) ─────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const snap = await window.ranch.worktrees.processSnapshot();
+        if (!cancelled) setProcessSnapshot(snap);
+      } catch {
+        // tmux/ps errors are surfaced indirectly (empty snapshot)
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, PROCESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, []);
 
-  function closeTerminal(): void {
-    setActiveTerminal(null);
-  }
+  // ─── notes (slow refresh — operator edits are intentional) ──
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const all = await window.ranch.notes.getAll();
+        if (!cancelled) setNotes(all);
+      } catch {
+        // ignore
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, NOTES_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, []);
+
+  // Save a note locally + persist. Optimistic — if the persist fails
+  // we'll see it on the next refresh tick.
+  const saveNote = useCallback(async (agent: string, label: string) => {
+    const trimmed = label.trim();
+    setNotes((prev) => {
+      const next = { ...prev };
+      if (trimmed.length === 0) {
+        delete next[agent];
+      } else {
+        next[agent] = {
+          label: trimmed,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return next;
+    });
+    try {
+      await window.ranch.notes.set(agent, trimmed);
+    } catch {
+      // server-side fail; next poll will reconcile
+    }
+  }, []);
 
   return (
     <div className="app">
@@ -132,108 +151,39 @@ export function App(): JSX.Element {
         <span className="app__version">
           {state.appVersion ? `v${state.appVersion}` : ''}
         </span>
+        <FleetWarnings snapshot={processSnapshot} />
+        {terminalEnv && !terminalEnv.tmuxAvailable && (
+          <span className="app__warn">
+            ⚠ tmux not found — install with <code>brew install tmux</code>
+          </span>
+        )}
       </header>
-      <main className="app__layout">
-        <section className="pane pane--grid">
-          <h2>Worktree grid</h2>
-          <Grid
-            state={state}
-            onOpenTerminal={openTerminal}
-            terminalEnv={terminalEnv}
-            processSnapshot={processSnapshot}
-          />
-        </section>
-        <section className="pane pane--terminal">
-          <div className="pane__heading">
-            <h2>
-              Terminal
-              {activeTerminal && (
-                <span className="pane__heading-sub">
-                  {' '}
-                  · ranch-{activeTerminal.agent}
-                </span>
-              )}
-            </h2>
-            {activeTerminal && (
-              <button className="link-button" onClick={closeTerminal}>
-                detach
-              </button>
-            )}
-          </div>
-          {activeTerminal ? (
-            <Terminal
-              key={activeTerminal.agent}
-              agent={activeTerminal.agent}
-              generation={activeTerminal.generation}
+      <main className="app__grid">
+        {state.status === 'loading' && (
+          <p className="placeholder">Loading worktrees…</p>
+        )}
+        {state.status === 'error' && (
+          <p className="placeholder placeholder--error">Error: {state.error}</p>
+        )}
+        {state.status === 'ready' &&
+          state.worktrees.map((wt) => (
+            <AgentCell
+              key={wt.agent}
+              worktree={wt}
+              processState={processSnapshot.perAgent[wt.agent] ?? null}
+              note={notes[wt.agent] ?? null}
+              terminalEnv={terminalEnv}
+              focused={focusedAgent === wt.agent}
+              onFocus={() => setFocusedAgent(wt.agent)}
+              onSaveNote={(label) => saveNote(wt.agent, label)}
             />
-          ) : (
-            <p className="placeholder">
-              Click <strong>Open terminal</strong> on a worktree card to attach.
-            </p>
-          )}
-        </section>
-        <section className="pane pane--inbox">
-          <h2>Inbox</h2>
-          <p className="placeholder">Empty.</p>
-        </section>
-        <section className="pane pane--memory">
-          <h2>Memory</h2>
-          <p className="placeholder">Lessons panel coming in Phase F.</p>
-        </section>
+          ))}
       </main>
     </div>
   );
 }
 
-function Grid({
-  state,
-  onOpenTerminal,
-  terminalEnv,
-  processSnapshot,
-}: {
-  state: AppState;
-  onOpenTerminal: (agent: string) => void;
-  terminalEnv: TerminalEnv | null;
-  processSnapshot: ProcessSnapshot;
-}): JSX.Element {
-  if (state.status === 'loading') {
-    return <p className="placeholder">Loading worktrees…</p>;
-  }
-  if (state.status === 'error') {
-    return (
-      <p className="placeholder placeholder--error">Error: {state.error}</p>
-    );
-  }
-  if (state.worktrees.length === 0) {
-    return (
-      <p className="placeholder">
-        No agents registered. Add some to <code>~/.ranch/config.toml</code>.
-      </p>
-    );
-  }
-  return (
-    <>
-      {terminalEnv && !terminalEnv.tmuxAvailable && (
-        <p className="card__warn card__warn--banner">
-          ⚠ tmux not found on PATH. Install with <code>brew install tmux</code>{' '}
-          to enable embedded terminals.
-        </p>
-      )}
-      <FleetWarnings snapshot={processSnapshot} />
-      <div className="grid">
-        {state.worktrees.map((wt) => (
-          <WorktreeCard
-            key={wt.agent}
-            worktree={wt}
-            onOpenTerminal={onOpenTerminal}
-            terminalEnv={terminalEnv}
-            processState={processSnapshot.perAgent[wt.agent] ?? null}
-          />
-        ))}
-      </div>
-    </>
-  );
-}
+// ─── Fleet warnings (orphans) ─────────────────────────────────
 
 function FleetWarnings({
   snapshot,
@@ -242,60 +192,54 @@ function FleetWarnings({
 }): JSX.Element | null {
   if (snapshot.orphanClaudes.length === 0) return null;
   return (
-    <div className="fleet-warnings">
-      <p className="fleet-warnings__heading">
-        ⚠ {snapshot.orphanClaudes.length} claude process
-        {snapshot.orphanClaudes.length === 1 ? '' : 'es'} running outside any
-        registered worktree
-      </p>
-      <ul className="fleet-warnings__list">
-        {snapshot.orphanClaudes.map((p) => (
-          <li key={p.pid} className="fleet-warnings__item">
-            <code>PID {p.pid}</code>
-            {p.cwd && <span className="fleet-warnings__path">{p.cwd}</span>}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <span className="app__warn" title={orphanTooltip(snapshot)}>
+      ⚠ {snapshot.orphanClaudes.length} orphan claude
+      {snapshot.orphanClaudes.length === 1 ? '' : 's'}
+    </span>
   );
 }
 
-interface WorktreeCardProps {
-  worktree: WorktreeBasics;
-  onOpenTerminal: (agent: string) => void;
-  terminalEnv: TerminalEnv | null;
-  processState: CCProcessState | null;
+function orphanTooltip(snap: ProcessSnapshot): string {
+  return snap.orphanClaudes
+    .map((p) => `PID ${p.pid}${p.cwd ? ` · ${p.cwd}` : ''}`)
+    .join('\n');
 }
 
-function WorktreeCard({
+// ─── AgentCell — one per worktree, embeds the live terminal ───
+
+interface AgentCellProps {
+  worktree: WorktreeBasics;
+  processState: CCProcessState | null;
+  note: AgentNote | null;
+  terminalEnv: TerminalEnv | null;
+  focused: boolean;
+  onFocus: () => void;
+  onSaveNote: (label: string) => void;
+}
+
+function AgentCell({
   worktree,
-  onOpenTerminal,
-  terminalEnv,
   processState,
-}: WorktreeCardProps): JSX.Element {
+  note,
+  terminalEnv,
+  focused,
+  onFocus,
+  onSaveNote,
+}: AgentCellProps): JSX.Element {
   const [session, setSession] = useState<SessionState | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
   const [git, setGit] = useState<WorktreeGitState | null>(null);
 
-  // Per-card transcript polling: cheap (file mtime + parse tail) and the
-  // freshness here is what makes the card actually useful.
+  // Per-cell transcript polling.
   useEffect(() => {
     let cancelled = false;
-
     async function refresh(): Promise<void> {
       try {
         const next = await window.ranch.worktrees.session(worktree.agent);
-        if (!cancelled) {
-          setSession(next);
-          setSessionError(null);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSessionError(err instanceof Error ? err.message : String(err));
-        }
+        if (!cancelled) setSession(next);
+      } catch {
+        // ignore
       }
     }
-
     void refresh();
     const handle = setInterval(refresh, SESSION_POLL_MS);
     return () => {
@@ -304,8 +248,7 @@ function WorktreeCard({
     };
   }, [worktree.agent]);
 
-  // Per-card git state polling. Slower than transcript — branch + last
-  // commit only change when the operator does something.
+  // Per-cell git polling.
   useEffect(() => {
     let cancelled = false;
     async function refresh(): Promise<void> {
@@ -313,7 +256,7 @@ function WorktreeCard({
         const next = await window.ranch.worktrees.git(worktree.agent);
         if (!cancelled) setGit(next);
       } catch {
-        // ignore — card just won't show git row
+        // ignore
       }
     }
     void refresh();
@@ -328,137 +271,219 @@ function WorktreeCard({
     (processState?.claudeRunning ?? false) &&
     session?.runState === 'awaiting_input';
 
+  const cellClass = useMemo(() => {
+    const c = ['cell'];
+    if (focused) c.push('cell--focused');
+    if (needsInput) c.push('cell--needs-input');
+    return c.join(' ');
+  }, [focused, needsInput]);
+
   return (
-    <article className={`card${needsInput ? ' card--needs-input' : ''}`}>
-      {/* Identity */}
-      <header className="card__header">
-        <div className="card__identity">
-          <span className="card__name">{worktree.agent}</span>
-          {worktree.description && (
-            <span className="card__desc">{worktree.description}</span>
-          )}
-        </div>
-        <SessionPill
-          session={session}
-          processState={processState}
-          error={sessionError}
-        />
-      </header>
-      <button
-        className="card__path"
-        onClick={() => {
-          void navigator.clipboard.writeText(worktree.worktreePath);
-        }}
-        title="Copy path"
-        type="button"
-      >
-        {worktree.worktreePath}
-      </button>
-
-      <div className="card__divider" />
-
-      {/* Live work */}
-      <GitRow git={git} session={session} />
-      <TopicLine session={session} />
-      <TodoSummary todos={session?.todos ?? []} />
-
-      <div className="card__divider" />
-
-      {/* Infrastructure */}
-      <ProcessRow processState={processState} />
-      <PortsRow ports={worktree.ports} source={worktree.portsSource} />
-
-      {/* Warnings */}
-      <ProcessWarnings processState={processState} />
-      <DriftWarnings worktree={worktree} />
-      {!worktree.envAgentExists && (
-        <p className="card__warn">
-          No <code>.env.agent</code> at this worktree.
-        </p>
-      )}
-
-      {/* Actions */}
-      <footer className="card__actions">
-        <button
-          className="card__action card__action--primary"
-          onClick={() => onOpenTerminal(worktree.agent)}
-          disabled={terminalEnv !== null && !terminalEnv.tmuxAvailable}
-          title={
-            terminalEnv && !terminalEnv.tmuxAvailable
-              ? 'tmux not installed'
-              : `Open ${worktree.agent}'s embedded terminal — launches Claude on first open, attaches afterward`
-          }
-        >
-          Open Claude
-        </button>
-        <button
-          className="card__action"
-          onClick={() => {
-            void window.ranch.app.revealInFinder(worktree.worktreePath);
-          }}
-          title="Reveal worktree in Finder"
-        >
-          Reveal
-        </button>
-      </footer>
+    <article
+      className={cellClass}
+      onMouseDown={onFocus}
+      onFocusCapture={onFocus}
+    >
+      <CellHeader
+        worktree={worktree}
+        session={session}
+        processState={processState}
+        git={git}
+        note={note}
+        onSaveNote={onSaveNote}
+      />
+      <div className="cell__terminal">
+        {terminalEnv && terminalEnv.tmuxAvailable ? (
+          <Terminal agent={worktree.agent} generation={1} />
+        ) : (
+          <p className="placeholder placeholder--center">
+            tmux not installed — terminals unavailable
+          </p>
+        )}
+      </div>
     </article>
   );
 }
 
-function ProcessWarnings({
+// ─── Cell header ──────────────────────────────────────────────
+
+function CellHeader({
+  worktree,
+  session,
   processState,
+  git,
+  note,
+  onSaveNote,
 }: {
+  worktree: WorktreeBasics;
+  session: SessionState | null;
   processState: CCProcessState | null;
-}): JSX.Element | null {
-  if (!processState || !processState.claudeRunning) return null;
-  const warnings: string[] = [];
-  if (!processState.tmux) {
-    warnings.push(
-      'claude is running here but no ranch- tmux session exists. It was likely started outside ranch — closing it from a stray terminal could surprise you. Use Open terminal to bring it under ranch.',
-    );
-  }
-  if (processState.claudeProcesses.length > 1) {
-    const pids = processState.claudeProcesses.map((p) => p.pid).join(', ');
-    warnings.push(
-      `${processState.claudeProcesses.length} claude processes here (PIDs ${pids}). Possible duplicate session — pick the right one before sending input.`,
-    );
-  }
-  if (warnings.length === 0) return null;
+  git: WorktreeGitState | null;
+  note: AgentNote | null;
+  onSaveNote: (label: string) => void;
+}): JSX.Element {
   return (
-    <div className="card__drift">
-      {warnings.map((m, i) => (
-        <p key={i} className="card__warn">
-          ⚠ {m}
-        </p>
-      ))}
-    </div>
+    <header className="cell__header">
+      <div className="cell__top">
+        <span className="cell__name">{worktree.agent}</span>
+        <SessionPill session={session} processState={processState} />
+        <GitInline git={git} session={session} />
+        <PortsInline ports={worktree.ports} />
+      </div>
+      <div className="cell__notes">
+        <EditableNote
+          agent={worktree.agent}
+          note={note}
+          onSaveNote={onSaveNote}
+        />
+        <ActivityLine session={session} />
+      </div>
+    </header>
   );
 }
+
+// ─── Editable note ────────────────────────────────────────────
+
+function EditableNote({
+  agent,
+  note,
+  onSaveNote,
+}: {
+  agent: string;
+  note: AgentNote | null;
+  onSaveNote: (label: string) => void;
+}): JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startEdit(): void {
+    setDraft(note?.label ?? '');
+    setEditing(true);
+  }
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  function commit(): void {
+    onSaveNote(draft);
+    setEditing(false);
+  }
+
+  function cancel(): void {
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="note__input"
+        value={draft}
+        placeholder={`What is ${agent} working on?`}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') cancel();
+        }}
+        // Don't let the cell's onMouseDown steal focus.
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+    );
+  }
+
+  if (note?.label) {
+    return (
+      <button
+        className="note__display"
+        onClick={(e) => {
+          e.stopPropagation();
+          startEdit();
+        }}
+        title="Click to edit"
+        type="button"
+      >
+        {note.label}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className="note__display note__display--empty"
+      onClick={(e) => {
+        e.stopPropagation();
+        startEdit();
+      }}
+      type="button"
+    >
+      + add a note (e.g. {`"working on scrapers tickets"`})
+    </button>
+  );
+}
+
+// ─── Activity line — current tool OR last assistant text ──────
+
+function ActivityLine({
+  session,
+}: {
+  session: SessionState | null;
+}): JSX.Element | null {
+  if (!session || session.status === 'none') return null;
+
+  if (session.runState === 'tool_in_flight' && session.currentTool) {
+    const t = session.currentTool;
+    return (
+      <p className="cell__activity cell__activity--tool">
+        <span className="cell__activity-label">running</span>{' '}
+        <code>{t.name}</code>
+        {t.summary && <span className="cell__activity-arg">: {t.summary}</span>}
+      </p>
+    );
+  }
+
+  if (session.lastAssistantText) {
+    return (
+      <p className="cell__activity" title={session.lastAssistantText}>
+        {truncate(session.lastAssistantText, 240)}
+      </p>
+    );
+  }
+
+  // Fallback: in-progress todo
+  const inProgress = session.todos.find((t) => t.status === 'in_progress');
+  if (inProgress) {
+    return (
+      <p className="cell__activity">
+        {truncate(inProgress.activeForm ?? inProgress.content, 240)}
+      </p>
+    );
+  }
+
+  return null;
+}
+
+// ─── Compact pieces for the header strip ─────────────────────
 
 function SessionPill({
   session,
   processState,
-  error,
 }: {
   session: SessionState | null;
   processState: CCProcessState | null;
-  error: string | null;
 }): JSX.Element {
-  if (error) return <span className="pill pill--error">err</span>;
-
-  // Combine process detection with transcript-derived run state for the
-  // strongest possible "what's claude doing right now" signal.
   const claudeAlive = processState?.claudeRunning ?? false;
   const runState = session?.runState ?? 'unknown';
 
   if (claudeAlive && runState === 'awaiting_input') {
-    const age = relativeAge(session?.lastActivityAt);
     return (
       <span
         className="pill pill--awaiting"
         title="Claude is waiting on a human reply"
       >
-        needs input · {age}
+        needs input
       </span>
     );
   }
@@ -470,7 +495,7 @@ function SessionPill({
     );
   }
   if (claudeAlive) {
-    return <span className="pill pill--running">claude running</span>;
+    return <span className="pill pill--running">claude</span>;
   }
   if (!session) return <span className="pill">…</span>;
   if (session.status === 'none') {
@@ -480,253 +505,75 @@ function SessionPill({
   return <span className="pill pill--active">last · {age}</span>;
 }
 
-function GitRow({
+function GitInline({
   git,
   session,
 }: {
   git: WorktreeGitState | null;
   session: SessionState | null;
 }): JSX.Element | null {
-  // git observer is authoritative; transcript branch is fallback while
-  // git poll is in flight on first paint.
   let branch: string | undefined;
   if (git?.status === 'ok') branch = git.branch;
   else if (session?.gitBranch) branch = session.gitBranch;
+  if (!branch) return null;
 
-  if (!branch && (!git || git.status !== 'ok')) return null;
-
-  const ticket = branch ? extractTicketId(branch) : null;
+  const ticket = extractTicketId(branch);
   const dirty = git?.status === 'ok' && git.dirty;
   const ahead = git?.status === 'ok' ? (git.ahead ?? 0) : 0;
   const behind = git?.status === 'ok' ? (git.behind ?? 0) : 0;
-  const lastCommit = git?.status === 'ok' ? git.lastCommit : undefined;
 
   return (
-    <div className="card__git">
-      <div className="card__git-line">
-        {branch && <span className="card__branch-name">{branch}</span>}
-        {ticket && <span className="card__ticket">{ticket}</span>}
-        {dirty && (
-          <span
-            className="card__git-dirty"
-            title="Uncommitted changes in working tree"
-          >
-            ●
-          </span>
-        )}
-        {(ahead > 0 || behind > 0) && (
-          <span
-            className="card__git-ahead-behind"
-            title={`${ahead} ahead, ${behind} behind origin/develop`}
-          >
-            {ahead > 0 && `↑${ahead}`}
-            {behind > 0 && `↓${behind}`}
-          </span>
-        )}
-      </div>
-      {lastCommit && (
-        <div
-          className="card__git-commit"
-          title={`${lastCommit.sha} · ${lastCommit.age}`}
-        >
-          <code>{lastCommit.sha}</code> {truncate(lastCommit.message, 60)}{' '}
-          <span className="card__git-age">· {lastCommit.age}</span>
-        </div>
+    <span className="git-inline">
+      <span className="git-inline__branch">{branch}</span>
+      {ticket && <span className="ticket-pill">{ticket}</span>}
+      {dirty && (
+        <span className="git-inline__dirty" title="uncommitted changes">
+          ●
+        </span>
       )}
-    </div>
+      {(ahead > 0 || behind > 0) && (
+        <span
+          className="git-inline__ahead-behind"
+          title={`${ahead} ahead, ${behind} behind origin/develop`}
+        >
+          {ahead > 0 && `↑${ahead}`}
+          {behind > 0 && `↓${behind}`}
+        </span>
+      )}
+    </span>
   );
 }
 
-function ProcessRow({
-  processState,
-}: {
-  processState: CCProcessState | null;
-}): JSX.Element | null {
-  if (!processState) return null;
-  const tmuxBadge = processState.tmux ? (
-    <span
-      className="proc-badge proc-badge--ok"
-      title={
-        processState.tmux.attachedClients > 0
-          ? `tmux session with ${processState.tmux.attachedClients} client(s)`
-          : 'tmux session detached but alive'
-      }
-    >
-      tmux ✓ {processState.tmux.attachedClients > 0 ? '· attached' : ''}
-    </span>
-  ) : (
-    <span className="proc-badge proc-badge--off" title="No ranch- tmux session">
-      tmux —
-    </span>
-  );
-  const claudePids = processState.claudeProcesses.map((p) => p.pid).join(', ');
-  const claudeBadge = processState.claudeRunning ? (
-    <span
-      className="proc-badge proc-badge--ok"
-      title={`claude PID(s): ${claudePids}`}
-    >
-      claude · {processState.claudeProcesses.length}
-    </span>
-  ) : (
-    <span
-      className="proc-badge proc-badge--off"
-      title="No claude process in this worktree"
-    >
-      claude —
-    </span>
-  );
-  return (
-    <div className="card__procs">
-      {tmuxBadge}
-      {claudeBadge}
-    </div>
-  );
-}
-
-function TopicLine({
-  session,
-}: {
-  session: SessionState | null;
-}): JSX.Element | null {
-  if (!session || session.status === 'none') return null;
-  const inProgress = session.todos.find((t) => t.status === 'in_progress');
-  const topic =
-    inProgress?.activeForm ??
-    inProgress?.content ??
-    session.lastUserPrompt ??
-    null;
-  if (!topic) return null;
-  return <p className="card__topic">{truncate(topic, 140)}</p>;
-}
-
-function TodoSummary({ todos }: { todos: TodoItem[] }): JSX.Element | null {
-  if (todos.length === 0) return null;
-  const done = todos.filter((t) => t.status === 'completed').length;
-  const inProgress = todos.filter((t) => t.status === 'in_progress').length;
-  return (
-    <div className="card__todos">
-      <div className="card__todos-summary">
-        <strong>
-          {done} / {todos.length}
-        </strong>{' '}
-        complete
-        {inProgress > 0 && <span> · {inProgress} in progress</span>}
-      </div>
-      <ul className="todo-list">
-        {todos.map((t, i) => (
-          <li
-            key={i}
-            className={`todo todo--${t.status.replace('_', '-')}`}
-            title={t.content}
-          >
-            <span className="todo__icon">{todoIcon(t.status)}</span>
-            <span className="todo__text">{t.content}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function PortsRow({
+function PortsInline({
   ports,
-  source,
 }: {
   ports: WorktreeBasics['ports'];
-  source: WorktreeBasics['portsSource'];
 }): JSX.Element | null {
   const buttons: { label: string; port: number }[] = [];
   if (ports.django !== undefined)
-    buttons.push({ label: 'Django', port: ports.django });
-  if (ports.vite !== undefined)
-    buttons.push({ label: 'Vite', port: ports.vite });
+    buttons.push({ label: 'D', port: ports.django });
+  if (ports.vite !== undefined) buttons.push({ label: 'V', port: ports.vite });
   if (buttons.length === 0) return null;
-  const sourceLabel =
-    source === 'ranch-config'
-      ? 'from ~/.ranch/config.toml'
-      : source === 'env-agent'
-        ? 'from .env.agent (may drift)'
-        : '';
   return (
-    <div className="card__ports">
+    <span className="ports-inline">
       {buttons.map((b) => (
         <a
           key={b.label}
-          className="port-button"
+          className="port-mini"
           href={`http://localhost:${b.port}`}
           target="_blank"
           rel="noreferrer"
-          title={`${b.label} :${b.port} ${sourceLabel}`}
+          onClick={(e) => e.stopPropagation()}
+          title={`Open localhost:${b.port}`}
         >
-          {b.label} <span className="port-button__num">:{b.port}</span>
+          {b.label}:{b.port}
         </a>
       ))}
-    </div>
+    </span>
   );
 }
 
-function DriftWarnings({
-  worktree,
-}: {
-  worktree: WorktreeBasics;
-}): JSX.Element | null {
-  const messages: string[] = [];
-
-  if (!worktree.envAgentMatches && worktree.envAgentName !== undefined) {
-    messages.push(
-      `.env.agent says AGENT_NAME=${worktree.envAgentName}, but this worktree is registered as ${worktree.agent}. Run \`make sync-env\` to repair.`,
-    );
-  }
-
-  if (worktree.portsSource === 'ranch-config') {
-    const drift: string[] = [];
-    if (
-      worktree.ports.django !== undefined &&
-      worktree.envAgentPorts.django !== undefined &&
-      worktree.ports.django !== worktree.envAgentPorts.django
-    ) {
-      drift.push(
-        `DJANGO_PORT (env: ${worktree.envAgentPorts.django}, config: ${worktree.ports.django})`,
-      );
-    }
-    if (
-      worktree.ports.vite !== undefined &&
-      worktree.envAgentPorts.vite !== undefined &&
-      worktree.ports.vite !== worktree.envAgentPorts.vite
-    ) {
-      drift.push(
-        `VITE_PORT (env: ${worktree.envAgentPorts.vite}, config: ${worktree.ports.vite})`,
-      );
-    }
-    if (drift.length > 0) {
-      messages.push(`.env.agent ports drift: ${drift.join(', ')}`);
-    }
-  }
-
-  if (messages.length === 0) return null;
-  return (
-    <div className="card__drift">
-      {messages.map((m, i) => (
-        <p key={i} className="card__warn">
-          ⚠ {m}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-// ─── helpers ─────────────────────────────────────────────────────────────
-
-function todoIcon(status: TodoItem['status']): string {
-  switch (status) {
-    case 'completed':
-      return '✓';
-    case 'in_progress':
-      return '◐';
-    case 'pending':
-      return '○';
-  }
-}
+// ─── helpers ─────────────────────────────────────────────────
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + '…';
@@ -742,11 +589,11 @@ function relativeAge(iso: string | undefined): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return '?';
   const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return `${sec}s`;
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return `${min}m`;
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return `${hr}h`;
   const day = Math.round(hr / 24);
-  return `${day}d ago`;
+  return `${day}d`;
 }

@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
+  InFlightTool,
   SessionRunState,
   SessionState,
   TodoItem,
@@ -150,32 +151,51 @@ function extractTodos(entry: Record<string, unknown>): TodoItem[] | null {
   return null;
 }
 
-function extractUserPromptText(entry: Record<string, unknown>): string | null {
-  const t = entry['type'];
-  if (t !== 'user') return null;
-  const message = asObject(entry['message']);
-  if (!message) return null;
-  const content = message['content'];
-  if (typeof content === 'string') {
-    const trimmed = content.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  const arr = asArray(content);
-  if (!arr) return null;
-  for (const block of arr) {
+/**
+ * Pull the trailing text from an assistant turn — claude usually wraps
+ * up with a "here's what I did" summary, which is what we want on the
+ * card header.
+ */
+function extractAssistantText(entry: Record<string, unknown>): string | null {
+  if (entry['type'] !== 'assistant') return null;
+  const parts: string[] = [];
+  for (const block of getMessageContent(entry)) {
     const obj = asObject(block);
     if (!obj) continue;
     if (obj['type'] === 'text') {
       const text = asString(obj['text']);
-      if (text && text.trim().length > 0) return text.trim();
+      if (text && text.trim().length > 0) parts.push(text.trim());
     }
   }
-  return null;
+  return parts.length === 0 ? null : parts.join('\n\n');
+}
+
+/**
+ * One-line summary of a tool's input. Conventions:
+ *   Bash: first line of the command, truncated
+ *   Edit/Write/Read/Glob/Grep/Notebook*: file path / pattern
+ *   anything else: empty (caller falls back to tool name only)
+ */
+function summarizeToolInput(name: string, input: unknown): string {
+  const obj = asObject(input);
+  if (!obj) return '';
+  if (name === 'Bash') {
+    const cmd = asString(obj['command']);
+    if (cmd) return cmd.split('\n')[0]!.slice(0, 120);
+    return '';
+  }
+  const path =
+    asString(obj['file_path']) ??
+    asString(obj['path']) ??
+    asString(obj['notebook_path']) ??
+    asString(obj['pattern']);
+  return path ?? '';
 }
 
 interface TranscriptScan {
   todos: TodoItem[];
-  lastUserPrompt?: string;
+  lastAssistantText?: string;
+  currentTool?: InFlightTool;
   lastActivityAt?: string;
   gitBranch?: string;
   runState: SessionRunState;
@@ -275,10 +295,9 @@ function inferRunState(
 function scanEntries(entries: ParsedEntry[]): TranscriptScan {
   const result: TranscriptScan = { todos: [], runState: 'unknown' };
   let foundTodos = false;
-  let foundPrompt = false;
+  let foundAssistantText = false;
 
-  // First pass: capture lastActivityAt + gitBranch from the newest entry
-  // that has them. Walk backward.
+  // Walk backward; capture the newest signals we care about.
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!.raw;
     if (result.lastActivityAt === undefined) {
@@ -296,16 +315,16 @@ function scanEntries(entries: ParsedEntry[]): TranscriptScan {
         foundTodos = true;
       }
     }
-    if (!foundPrompt) {
-      const prompt = extractUserPromptText(entry);
-      if (prompt) {
-        result.lastUserPrompt = prompt;
-        foundPrompt = true;
+    if (!foundAssistantText) {
+      const text = extractAssistantText(entry);
+      if (text) {
+        result.lastAssistantText = text;
+        foundAssistantText = true;
       }
     }
     if (
       foundTodos &&
-      foundPrompt &&
+      foundAssistantText &&
       result.lastActivityAt !== undefined &&
       result.gitBranch !== undefined
     ) {
@@ -314,6 +333,43 @@ function scanEntries(entries: ParsedEntry[]): TranscriptScan {
   }
 
   result.runState = inferRunState(entries, result.lastActivityAt, Date.now());
+
+  // If a tool is mid-flight, surface its name + input summary.
+  if (result.runState === 'tool_in_flight') {
+    let latestAssistantIdx = -1;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i]!.raw['type'] === 'assistant') {
+        latestAssistantIdx = i;
+        break;
+      }
+    }
+    if (latestAssistantIdx >= 0) {
+      const assistantEntry = entries[latestAssistantIdx]!.raw;
+      const toolUses: Array<{ id: string; name: string; input: unknown }> = [];
+      for (const block of getMessageContent(assistantEntry)) {
+        const obj = asObject(block);
+        if (!obj) continue;
+        if (obj['type'] !== 'tool_use') continue;
+        const id = asString(obj['id']);
+        const name = asString(obj['name']);
+        if (id && name) toolUses.push({ id, name, input: obj['input'] });
+      }
+      const responded = new Set<string>();
+      for (let i = latestAssistantIdx + 1; i < entries.length; i++) {
+        for (const id of extractToolResultIds(entries[i]!.raw)) {
+          responded.add(id);
+        }
+      }
+      const pending = toolUses.find((t) => !responded.has(t.id));
+      if (pending) {
+        result.currentTool = {
+          name: pending.name,
+          summary: summarizeToolInput(pending.name, pending.input),
+        };
+      }
+    }
+  }
+
   return result;
 }
 
@@ -344,8 +400,9 @@ export async function getActiveSession(
   };
   if (scan.lastActivityAt !== undefined)
     state.lastActivityAt = scan.lastActivityAt;
-  if (scan.lastUserPrompt !== undefined)
-    state.lastUserPrompt = scan.lastUserPrompt;
+  if (scan.lastAssistantText !== undefined)
+    state.lastAssistantText = scan.lastAssistantText;
+  if (scan.currentTool !== undefined) state.currentTool = scan.currentTool;
   if (scan.gitBranch !== undefined) state.gitBranch = scan.gitBranch;
   return state;
 }

@@ -29,6 +29,8 @@ const IPC_CHANNELS = {
   worktreesSession: 'ranch:worktrees:session',
   worktreesGit: 'ranch:worktrees:git',
   worktreesProcessSnapshot: 'ranch:worktrees:processSnapshot',
+  notesGetAll: 'ranch:notes:getAll',
+  notesSet: 'ranch:notes:set',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -69,6 +71,11 @@ const api: RanchApi = {
     git: (agent) => ipcRenderer.invoke(IPC_CHANNELS.worktreesGit, agent),
     processSnapshot: () =>
       ipcRenderer.invoke(IPC_CHANNELS.worktreesProcessSnapshot),
+  },
+  notes: {
+    getAll: () => ipcRenderer.invoke(IPC_CHANNELS.notesGetAll),
+    set: (agent, label) =>
+      ipcRenderer.invoke(IPC_CHANNELS.notesSet, agent, label),
   },
   terminal: {
     env: () => ipcRenderer.invoke(IPC_CHANNELS.terminalEnv),
