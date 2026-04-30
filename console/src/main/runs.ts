@@ -86,6 +86,37 @@ function mapState(raw: unknown): RunStatus {
   }
 }
 
+/**
+ * State values where we'd expect the orchestrator process to still be
+ * alive. If the recorded PID is dead in any of these, we override the
+ * status to 'abandoned' so the operator can tell what's actually live.
+ */
+const ACTIVE_STATES = new Set([
+  'planning',
+  'in_development',
+  'tests_green',
+  'needs_approval',
+  'queued',
+]);
+
+/** kill(pid, 0) returns without throwing iff the process exists. */
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but we can't signal it.
+    // EPERM still means alive.
+    return (
+      typeof err === 'object' &&
+      err !== null &&
+      'code' in err &&
+      (err as { code: unknown }).code === 'EPERM'
+    );
+  }
+}
+
 /** Trim a long brief down for display. */
 function summarizeBrief(text: string | undefined, max = 200): string {
   if (!text) return '';
@@ -95,14 +126,30 @@ function summarizeBrief(text: string | undefined, max = 200): string {
 
 function rowToRunRecord(row: Record<string, unknown>): RunRecord {
   const id = asNumber(row['id'])!;
-  const status = mapState(row['state']);
+  const rawState = asString(row['state']) ?? 'unknown';
+  let status = mapState(rawState);
   const brief = summarizeBrief(asString(row['initial_prompt']));
+  const pid = asNumber(row['pid']);
+
+  // Zombie detection: if the orchestrator says the run is in an active
+  // state but the recorded PID is dead (or there's no PID at all for an
+  // active state), treat it as abandoned. Without this, runs from
+  // crashed/killed orchestrator processes look like they're still going.
+  let pidAlive: boolean | undefined;
+  if (pid !== undefined) pidAlive = isPidAlive(pid);
+
+  if (ACTIVE_STATES.has(rawState)) {
+    if (pid === undefined || pidAlive === false) {
+      status = 'abandoned';
+    }
+  }
+
   const rec: RunRecord = {
     id,
     agent: asString(row['agent']) ?? 'unknown',
     status,
     brief,
-    rawState: asString(row['state']) ?? 'unknown',
+    rawState,
     dispatchMode:
       asString(row['dispatch_mode']) === 'background'
         ? 'background'
@@ -116,8 +163,8 @@ function rowToRunRecord(row: Record<string, unknown>): RunRecord {
   if (endedAt) rec.endedAt = endedAt;
   const prUrl = asString(row['pr_url']);
   if (prUrl) rec.prUrl = prUrl;
-  const pid = asNumber(row['pid']);
   if (pid !== undefined) rec.pid = pid;
+  if (pidAlive !== undefined) rec.pidAlive = pidAlive;
   const logPath = asString(row['log_path']);
   if (logPath) rec.logPath = logPath;
   const branchName = asString(row['branch_name']);
