@@ -34,6 +34,10 @@ const IPC_CHANNELS = {
   runsList: 'ranch:runs:list',
   runsGet: 'ranch:runs:get',
   runsCleanupAbandoned: 'ranch:runs:cleanupAbandoned',
+  runsApprove: 'ranch:runs:approve',
+  runsReject: 'ranch:runs:reject',
+  runsNote: 'ranch:runs:note',
+  runsStop: 'ranch:runs:stop',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -88,6 +92,12 @@ const api: RanchApi = {
     get: (id) => ipcRenderer.invoke(IPC_CHANNELS.runsGet, id),
     cleanupAbandoned: () =>
       ipcRenderer.invoke(IPC_CHANNELS.runsCleanupAbandoned),
+    approve: (id, note) =>
+      ipcRenderer.invoke(IPC_CHANNELS.runsApprove, id, note),
+    reject: (id, reason) =>
+      ipcRenderer.invoke(IPC_CHANNELS.runsReject, id, reason),
+    note: (id, text) => ipcRenderer.invoke(IPC_CHANNELS.runsNote, id, text),
+    stop: (id) => ipcRenderer.invoke(IPC_CHANNELS.runsStop, id),
   },
   terminal: {
     env: () => ipcRenderer.invoke(IPC_CHANNELS.terminalEnv),

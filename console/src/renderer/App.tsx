@@ -648,10 +648,23 @@ function RunDetailModal({
 }): JSX.Element {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  async function refreshNow(): Promise<void> {
+    try {
+      const d = await window.ranch.runs.get(runId);
+      setDetail(d);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     async function refresh(): Promise<void> {
+      if (cancelled) return;
       try {
         const d = await window.ranch.runs.get(runId);
         if (!cancelled) {
@@ -671,6 +684,76 @@ function RunDetailModal({
       clearInterval(handle);
     };
   }, [runId]);
+
+  function flashAction(msg: string): void {
+    setActionMsg(msg);
+    setTimeout(() => setActionMsg(null), 3500);
+  }
+
+  async function withBusy(
+    label: string,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    setBusy(label);
+    try {
+      await fn();
+      flashAction(`${label} succeeded`);
+      await refreshNow();
+    } catch (err) {
+      flashAction(
+        `${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleApprove(): Promise<void> {
+    const note = window.prompt(
+      'Optional note for approval (leave blank to skip):',
+      '',
+    );
+    if (note === null) return; // user cancelled
+    await withBusy('Approve', () =>
+      window.ranch.runs.approve(runId, note || undefined),
+    );
+  }
+
+  async function handleReject(): Promise<void> {
+    const reason = window.prompt(
+      'Reason for rejection (the agent will see this):',
+      '',
+    );
+    if (reason === null) return;
+    if (!reason.trim()) {
+      flashAction('Reject needs a reason — cancelled.');
+      return;
+    }
+    await withBusy('Reject', () => window.ranch.runs.reject(runId, reason));
+  }
+
+  async function handleNote(): Promise<void> {
+    const text = window.prompt(
+      'Note to send mid-run (the agent receives this on its next tick):',
+      '',
+    );
+    if (text === null) return;
+    if (!text.trim()) {
+      flashAction('Note text required — cancelled.');
+      return;
+    }
+    await withBusy('Note', () => window.ranch.runs.note(runId, text));
+  }
+
+  async function handleStop(): Promise<void> {
+    const ok = window.confirm(
+      `Stop run #${runId}?\n\n` +
+        'This sends a clean stop signal to the orchestrator. ' +
+        'Any in-flight tool call may still complete before exit.',
+    );
+    if (!ok) return;
+    await withBusy('Stop', () => window.ranch.runs.stop(runId));
+  }
 
   return (
     <div className="run-modal__backdrop" onClick={onClose}>
@@ -793,16 +876,18 @@ function RunDetailModal({
               </DetailSection>
             )}
 
-            <DetailSection title="Lifecycle (CLI)">
-              <p className="detail__empty">
-                Approve / reject / stop via terminal until UI buttons land:
-              </p>
-              <pre className="run-modal__cli">
-                ranch approve {runId}
-                {'\n'}ranch reject {runId} &quot;reason&quot;
-                {'\n'}ranch note {runId} &quot;note text&quot;
-                {'\n'}ranch stop {runId}
-              </pre>
+            <DetailSection title="Actions">
+              <RunActions
+                detail={detail}
+                busy={busy}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                onNote={handleNote}
+                onStop={handleStop}
+              />
+              {actionMsg && (
+                <p className="run-modal__action-msg">{actionMsg}</p>
+              )}
             </DetailSection>
           </div>
         )}
@@ -1601,6 +1686,85 @@ function DetailRow({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+// ─── Run lifecycle action buttons ─────────────────────────────
+
+function RunActions({
+  detail,
+  busy,
+  onApprove,
+  onReject,
+  onNote,
+  onStop,
+}: {
+  detail: RunDetail;
+  busy: string | null;
+  onApprove: () => void;
+  onReject: () => void;
+  onNote: () => void;
+  onStop: () => void;
+}): JSX.Element {
+  // Whether each action is contextually relevant. Buttons stay visible
+  // but are disabled if the run state doesn't make them sensible — that
+  // way the operator always sees what's possible, not just what's wired.
+  const awaitingApproval = detail.rawState === 'needs_approval';
+  const isActive = [
+    'planning',
+    'in_development',
+    'tests_green',
+    'needs_approval',
+    'queued',
+  ].includes(detail.rawState);
+
+  return (
+    <div className="run-actions">
+      <button
+        type="button"
+        className="run-action run-action--approve"
+        onClick={onApprove}
+        disabled={!awaitingApproval || busy !== null}
+        title={
+          awaitingApproval
+            ? 'Approve the current checkpoint (ranch approve)'
+            : 'Only available when state = needs_approval'
+        }
+      >
+        {busy === 'Approve' ? '…' : 'Approve'}
+      </button>
+      <button
+        type="button"
+        className="run-action run-action--reject"
+        onClick={onReject}
+        disabled={!awaitingApproval || busy !== null}
+        title={
+          awaitingApproval
+            ? 'Reject the current checkpoint with a reason (ranch reject)'
+            : 'Only available when state = needs_approval'
+        }
+      >
+        {busy === 'Reject' ? '…' : 'Reject'}
+      </button>
+      <button
+        type="button"
+        className="run-action"
+        onClick={onNote}
+        disabled={!isActive || busy !== null}
+        title="Send a note to the agent mid-run (ranch note)"
+      >
+        {busy === 'Note' ? '…' : 'Note'}
+      </button>
+      <button
+        type="button"
+        className="run-action run-action--stop"
+        onClick={onStop}
+        disabled={!isActive || busy !== null}
+        title="Stop the run cleanly (ranch stop)"
+      >
+        {busy === 'Stop' ? '…' : 'Stop'}
+      </button>
     </div>
   );
 }

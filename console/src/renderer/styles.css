@@ -1266,6 +1266,79 @@ body,
   overflow-x: auto;
 }
 
+.run-modal__action-msg {
+  margin: 0.4rem 0 0;
+  font-size: 0.74rem;
+  padding: 0.3rem 0.55rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+/* ─── Run action buttons ───────────────────────────── */
+
+.run-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.run-action {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.8rem;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+  min-width: 4.5rem;
+}
+
+.run-action:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.run-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.run-action--approve {
+  background: rgba(92, 212, 122, 0.14);
+  color: var(--green);
+  border-color: rgba(92, 212, 122, 0.35);
+}
+.run-action--approve:hover:not(:disabled) {
+  background: rgba(92, 212, 122, 0.22);
+  border-color: var(--green);
+}
+
+.run-action--reject {
+  background: rgba(255, 106, 106, 0.12);
+  color: var(--red);
+  border-color: rgba(255, 106, 106, 0.3);
+}
+.run-action--reject:hover:not(:disabled) {
+  background: rgba(255, 106, 106, 0.18);
+  border-color: var(--red);
+}
+
+.run-action--stop {
+  background: rgba(255, 106, 106, 0.08);
+  color: var(--red);
+  border-color: rgba(255, 106, 106, 0.25);
+}
+.run-action--stop:hover:not(:disabled) {
+  background: rgba(255, 106, 106, 0.14);
+  border-color: var(--red);
+}
+
 .detail__pr-link {
   color: var(--accent);
   text-decoration: none;

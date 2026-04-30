@@ -20,7 +20,15 @@ import { getActiveSession } from './transcript.js';
 import { getWorktreeGitState } from './git.js';
 import { snapshotProcessState } from './process.js';
 import { getAllNotes, setNote } from './notes.js';
-import { listRuns, getRun, cleanupAbandonedRuns } from './runs.js';
+import {
+  listRuns,
+  getRun,
+  cleanupAbandonedRuns,
+  approveRun,
+  rejectRun,
+  noteRun,
+  stopRun,
+} from './runs.js';
 import {
   attachTerminal,
   detachTerminal,
@@ -42,6 +50,10 @@ export const IPC_CHANNELS = {
   runsList: 'ranch:runs:list',
   runsGet: 'ranch:runs:get',
   runsCleanupAbandoned: 'ranch:runs:cleanupAbandoned',
+  runsApprove: 'ranch:runs:approve',
+  runsReject: 'ranch:runs:reject',
+  runsNote: 'ranch:runs:note',
+  runsStop: 'ranch:runs:stop',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -123,6 +135,36 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.runsCleanupAbandoned, async () => {
     return cleanupAbandonedRuns();
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.runsApprove,
+    async (_event, id: unknown, note: unknown) => {
+      if (typeof id !== 'number') throw new Error('runs.approve needs id');
+      await approveRun(id, typeof note === 'string' ? note : undefined);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.runsReject,
+    async (_event, id: unknown, reason: unknown) => {
+      if (typeof id !== 'number') throw new Error('runs.reject needs id');
+      await rejectRun(id, typeof reason === 'string' ? reason : undefined);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.runsNote,
+    async (_event, id: unknown, text: unknown) => {
+      if (typeof id !== 'number') throw new Error('runs.note needs id');
+      if (typeof text !== 'string') throw new Error('runs.note needs text');
+      await noteRun(id, text);
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.runsStop, async (_event, id: unknown) => {
+    if (typeof id !== 'number') throw new Error('runs.stop needs id');
+    await stopRun(id);
   });
 
   ipcMain.handle(IPC_CHANNELS.terminalEnv, async () => getTerminalEnv());
