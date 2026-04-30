@@ -30,6 +30,68 @@ const execFile = promisify(execFileCb);
 const RANCH_DIR = process.env.RANCH_HOME ?? join(homedir(), '.ranch');
 const DB_PATH = join(RANCH_DIR, 'ranch.db');
 
+/**
+ * Locate the `ranch` Python CLI. Electron's spawned PATH on macOS may
+ * not include /opt/homebrew/bin, so we look there explicitly first.
+ * Cached after first lookup.
+ */
+let cachedRanchBin: string | null | undefined;
+async function findRanchBin(): Promise<string | null> {
+  if (cachedRanchBin !== undefined) return cachedRanchBin;
+  const override = process.env['RANCH_BIN'];
+  if (override && existsSync(override)) {
+    cachedRanchBin = override;
+    return override;
+  }
+  for (const candidate of ['/opt/homebrew/bin/ranch', '/usr/local/bin/ranch']) {
+    if (existsSync(candidate)) {
+      cachedRanchBin = candidate;
+      return candidate;
+    }
+  }
+  try {
+    const { stdout } = await execFile('which', ['ranch']);
+    const path = stdout.trim();
+    cachedRanchBin = path.length > 0 ? path : null;
+    return cachedRanchBin;
+  } catch {
+    cachedRanchBin = null;
+    return null;
+  }
+}
+
+async function runRanchCli(args: string[]): Promise<{ stdout: string }> {
+  const bin = await findRanchBin();
+  if (!bin) {
+    throw new Error(
+      'ranch CLI not found on PATH. Set RANCH_BIN or install via pip.',
+    );
+  }
+  return execFile(bin, args, { maxBuffer: 1024 * 1024 });
+}
+
+export async function approveRun(id: number, note?: string): Promise<void> {
+  const args = ['approve', String(id)];
+  if (note && note.trim()) args.push('--note', note.trim());
+  await runRanchCli(args);
+}
+
+export async function rejectRun(id: number, reason?: string): Promise<void> {
+  const args = ['reject', String(id)];
+  if (reason && reason.trim()) args.push(reason.trim());
+  await runRanchCli(args);
+}
+
+export async function noteRun(id: number, text: string): Promise<void> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error('note text cannot be empty');
+  await runRanchCli(['note', String(id), trimmed]);
+}
+
+export async function stopRun(id: number): Promise<void> {
+  await runRanchCli(['stop', String(id)]);
+}
+
 async function query(sql: string): Promise<unknown[]> {
   if (!existsSync(DB_PATH)) return [];
   const { stdout } = await execFile('/usr/bin/sqlite3', [

@@ -328,7 +328,6 @@ export interface RanchApi {
     set: (agent: string, label: string) => Promise<AgentNote | null>;
   };
   runs: {
-    /** Read-only listing — lifecycle controls go through Python CLI for now. */
     list: (limit?: number) => Promise<RunRecord[]>;
     get: (id: number) => Promise<RunDetail | null>;
     /**
@@ -336,6 +335,11 @@ export interface RanchApi {
      * Returns the number of rows updated.
      */
     cleanupAbandoned: () => Promise<number>;
+    /** Lifecycle — each shells out to the Python `ranch` CLI. */
+    approve: (id: number, note?: string) => Promise<void>;
+    reject: (id: number, reason?: string) => Promise<void>;
+    note: (id: number, text: string) => Promise<void>;
+    stop: (id: number) => Promise<void>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
