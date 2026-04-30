@@ -19,6 +19,7 @@ import { listWorktrees } from './worktrees.js';
 import { getActiveSession } from './transcript.js';
 import { getWorktreeGitState } from './git.js';
 import { snapshotProcessState } from './process.js';
+import { getAllNotes, setNote } from './notes.js';
 import {
   attachTerminal,
   detachTerminal,
@@ -33,6 +34,8 @@ export const IPC_CHANNELS = {
   worktreesSession: 'ranch:worktrees:session',
   worktreesGit: 'ranch:worktrees:git',
   worktreesProcessSnapshot: 'ranch:worktrees:processSnapshot',
+  notesGetAll: 'ranch:notes:getAll',
+  notesSet: 'ranch:notes:set',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -81,6 +84,21 @@ export function registerIpcHandlers(): void {
     for (const a of config.agents) agents[a.name] = a.worktree;
     return snapshotProcessState({ agents });
   });
+
+  ipcMain.handle(IPC_CHANNELS.notesGetAll, async () => getAllNotes());
+
+  ipcMain.handle(
+    IPC_CHANNELS.notesSet,
+    async (_event, agent: unknown, label: unknown) => {
+      if (typeof agent !== 'string' || !agent) {
+        throw new Error('notes.set requires an agent name');
+      }
+      if (typeof label !== 'string') {
+        throw new Error('notes.set requires a string label');
+      }
+      return setNote(agent, label);
+    },
+  );
 
   ipcMain.handle(IPC_CHANNELS.terminalEnv, async () => getTerminalEnv());
 

@@ -152,6 +152,14 @@ export type SessionRunState =
   | 'idle'
   | 'unknown';
 
+/** A single tool_use the assistant is running but hasn't received a result for. */
+export interface InFlightTool {
+  /** Tool name, e.g. "Bash", "Edit", "Read" */
+  name: string;
+  /** Short, human-readable summary of the tool's input */
+  summary: string;
+}
+
 export interface SessionState {
   /** 'active' = transcript exists; 'none' = no transcript directory */
   status: 'active' | 'none';
@@ -160,14 +168,32 @@ export interface SessionState {
   transcriptPath?: string;
   /** ISO timestamp of the last entry */
   lastActivityAt?: string;
-  /** Most recent user prompt text (for "topic" derivation in the card) */
-  lastUserPrompt?: string;
+  /**
+   * Claude's most recent assistant text content — usually a "here's
+   * what I just did" wrap-up. Far more useful than the user's last
+   * prompt when surfacing on a card.
+   */
+  lastAssistantText?: string;
+  /**
+   * Tool currently in flight when runState === 'tool_in_flight'.
+   * The first unanswered tool_use from the latest assistant turn.
+   */
+  currentTool?: InFlightTool;
   /** Most recent TodoWrite list — empty if the agent never used TodoWrite */
   todos: TodoItem[];
   /** Branch CC was on at the latest entry (assistant entries include `gitBranch`) */
   gitBranch?: string;
   /** Inferred run state — see SessionRunState */
   runState: SessionRunState;
+}
+
+// ─── Notes (operator-owned per-agent labels) ─────────────────────────────
+
+export interface AgentNote {
+  /** Free-form text the operator wrote for this agent */
+  label: string;
+  /** ISO timestamp of last edit */
+  updatedAt: string;
 }
 
 // ─── Terminal (MVP-6) ────────────────────────────────────────────────────
@@ -223,6 +249,12 @@ export interface RanchApi {
     git: (agent: string) => Promise<WorktreeGitState>;
     /** Fleet snapshot — one ps + one tmux-list per call, all agents. */
     processSnapshot: () => Promise<ProcessSnapshot>;
+  };
+  notes: {
+    /** Returns notes keyed by agent name. Missing key = no note. */
+    getAll: () => Promise<Record<string, AgentNote>>;
+    /** Pass empty string to clear. */
+    set: (agent: string, label: string) => Promise<AgentNote | null>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
