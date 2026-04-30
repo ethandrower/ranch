@@ -196,6 +196,69 @@ export interface AgentNote {
   updatedAt: string;
 }
 
+// ─── Automated runs (read from ~/.ranch/ranch.db) ────────────────────────
+
+/**
+ * Card-level status that the UI distinguishes between. Maps from the
+ * orchestrator's wider state vocabulary in src/main/runs.ts. The UI
+ * groups multiple raw states under one status when they look the same
+ * to the operator.
+ */
+export type RunStatus =
+  | 'planning'
+  | 'queued'
+  | 'working'
+  | 'awaiting_approval'
+  | 'done'
+  | 'stopped'
+  | 'blocked'
+  | 'unknown';
+
+export interface RunRecord {
+  id: number;
+  agent: string;
+  ticket?: string;
+  status: RunStatus;
+  /** The orchestrator's raw state string — useful for tooltips. */
+  rawState: string;
+  /** Truncated initial_prompt for the card. */
+  brief: string;
+  startedAt?: string;
+  endedAt?: string;
+  dispatchMode: 'foreground' | 'background';
+  prUrl?: string;
+  pid?: number;
+  logPath?: string;
+  branchName?: string;
+}
+
+export interface RunCheckpoint {
+  id: number;
+  runId: number;
+  kind: string;
+  summary?: string;
+  createdAt?: string;
+  decision: 'pending' | 'approved' | 'rejected' | string;
+  decisionNote?: string;
+  decidedAt?: string;
+}
+
+export interface RunInterjection {
+  id: number;
+  runId: number;
+  kind: string;
+  content?: string;
+  createdAt?: string;
+  processedAt?: string;
+}
+
+export interface RunDetail extends RunRecord {
+  /** The full, untruncated initial_prompt. */
+  initialPrompt?: string;
+  checkpoints: RunCheckpoint[];
+  interjections: RunInterjection[];
+}
+
 // ─── Terminal (MVP-6) ────────────────────────────────────────────────────
 
 export interface TerminalEnv {
@@ -255,6 +318,11 @@ export interface RanchApi {
     getAll: () => Promise<Record<string, AgentNote>>;
     /** Pass empty string to clear. */
     set: (agent: string, label: string) => Promise<AgentNote | null>;
+  };
+  runs: {
+    /** Read-only. Lifecycle controls go through the Python CLI for now. */
+    list: (limit?: number) => Promise<RunRecord[]>;
+    get: (id: number) => Promise<RunDetail | null>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
