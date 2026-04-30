@@ -26,6 +26,7 @@ import { promisify } from 'node:util';
 import type {
   CCProcessState,
   ClaudeProcess,
+  ProcessSnapshot,
   TmuxSessionState,
 } from '../shared/types.js';
 
@@ -168,7 +169,7 @@ async function resolveClaudeCwds(
  */
 export async function snapshotProcessState(
   input: SnapshotInput,
-): Promise<Record<string, CCProcessState>> {
+): Promise<ProcessSnapshot> {
   const [tmuxByAgent, rawClaudes] = await Promise.all([
     listRanchTmuxSessions(),
     listClaudeProcesses(),
@@ -178,19 +179,32 @@ export async function snapshotProcessState(
   // Bucket claude processes by worktree (string-prefix match: a claude
   // started inside a subdirectory of the worktree still attributes
   // back to the worktree).
-  const out: Record<string, CCProcessState> = {};
+  const perAgent: Record<string, CCProcessState> = {};
+  const claimed = new Set<number>();
   for (const [agent, worktreePath] of Object.entries(input.agents)) {
     const tmux = tmuxByAgent.get(agent) ?? null;
     const inWorktree = claudes.filter(
       (c) => c.cwd !== undefined && isWithin(c.cwd, worktreePath),
     );
-    out[agent] = {
+    for (const p of inWorktree) claimed.add(p.pid);
+    perAgent[agent] = {
       tmux,
       claudeRunning: inWorktree.length > 0,
       claudeProcesses: inWorktree,
     };
   }
-  return out;
+
+  // Orphans: claudes that didn't attribute to any registered worktree.
+  // Could be an operator running claude in a non-tracked dir (Documents/,
+  // a one-off scratch repo) or, more concerningly, a claude inside one
+  // of our worktrees that we somehow missed. The cwd will tell.
+  const orphanClaudes = claudes.filter((c) => !claimed.has(c.pid));
+
+  return {
+    perAgent,
+    orphanClaudes,
+    totalClaudes: claudes.length,
+  };
 }
 
 function isWithin(path: string, base: string): boolean {

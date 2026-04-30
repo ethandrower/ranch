@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react';
 import type {
   CCProcessState,
+  ProcessSnapshot,
   SessionState,
   TerminalEnv,
   TodoItem,
   WorktreeBasics,
   WorktreeGitState,
 } from '../shared/types.js';
+
+const EMPTY_SNAPSHOT: ProcessSnapshot = {
+  perAgent: {},
+  orphanClaudes: [],
+  totalClaudes: 0,
+};
 import { Terminal } from './Terminal.js';
 
 const SESSION_POLL_MS = 4000;
@@ -36,9 +43,8 @@ export function App(): JSX.Element {
     null,
   );
   const [terminalEnv, setTerminalEnv] = useState<TerminalEnv | null>(null);
-  const [processSnapshot, setProcessSnapshot] = useState<
-    Record<string, CCProcessState>
-  >({});
+  const [processSnapshot, setProcessSnapshot] =
+    useState<ProcessSnapshot>(EMPTY_SNAPSHOT);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,7 +194,7 @@ function Grid({
   state: AppState;
   onOpenTerminal: (agent: string) => void;
   terminalEnv: TerminalEnv | null;
-  processSnapshot: Record<string, CCProcessState>;
+  processSnapshot: ProcessSnapshot;
 }): JSX.Element {
   if (state.status === 'loading') {
     return <p className="placeholder">Loading worktrees…</p>;
@@ -213,6 +219,7 @@ function Grid({
           to enable embedded terminals.
         </p>
       )}
+      <FleetWarnings snapshot={processSnapshot} />
       <div className="grid">
         {state.worktrees.map((wt) => (
           <WorktreeCard
@@ -220,11 +227,36 @@ function Grid({
             worktree={wt}
             onOpenTerminal={onOpenTerminal}
             terminalEnv={terminalEnv}
-            processState={processSnapshot[wt.agent] ?? null}
+            processState={processSnapshot.perAgent[wt.agent] ?? null}
           />
         ))}
       </div>
     </>
+  );
+}
+
+function FleetWarnings({
+  snapshot,
+}: {
+  snapshot: ProcessSnapshot;
+}): JSX.Element | null {
+  if (snapshot.orphanClaudes.length === 0) return null;
+  return (
+    <div className="fleet-warnings">
+      <p className="fleet-warnings__heading">
+        ⚠ {snapshot.orphanClaudes.length} claude process
+        {snapshot.orphanClaudes.length === 1 ? '' : 'es'} running outside any
+        registered worktree
+      </p>
+      <ul className="fleet-warnings__list">
+        {snapshot.orphanClaudes.map((p) => (
+          <li key={p.pid} className="fleet-warnings__item">
+            <code>PID {p.pid}</code>
+            {p.cwd && <span className="fleet-warnings__path">{p.cwd}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -294,29 +326,45 @@ function WorktreeCard({
 
   return (
     <article className="card">
+      {/* Identity */}
       <header className="card__header">
-        <span className="card__name">{worktree.agent}</span>
+        <div className="card__identity">
+          <span className="card__name">{worktree.agent}</span>
+          {worktree.description && (
+            <span className="card__desc">{worktree.description}</span>
+          )}
+        </div>
         <SessionPill
           session={session}
           processState={processState}
           error={sessionError}
         />
       </header>
-      {worktree.description && (
-        <p className="card__desc">{worktree.description}</p>
-      )}
       <p className="card__path">{worktree.worktreePath}</p>
+
+      <div className="card__divider" />
+
+      {/* Live work */}
       <GitRow git={git} session={session} />
       <TopicLine session={session} />
       <TodoSummary todos={session?.todos ?? []} />
+
+      <div className="card__divider" />
+
+      {/* Infrastructure */}
       <ProcessRow processState={processState} />
       <PortsRow ports={worktree.ports} source={worktree.portsSource} />
+
+      {/* Warnings */}
+      <ProcessWarnings processState={processState} />
       <DriftWarnings worktree={worktree} />
       {!worktree.envAgentExists && (
         <p className="card__warn">
           No <code>.env.agent</code> at this worktree.
         </p>
       )}
+
+      {/* Actions */}
       <footer className="card__actions">
         <button
           className="card__action"
@@ -332,6 +380,36 @@ function WorktreeCard({
         </button>
       </footer>
     </article>
+  );
+}
+
+function ProcessWarnings({
+  processState,
+}: {
+  processState: CCProcessState | null;
+}): JSX.Element | null {
+  if (!processState || !processState.claudeRunning) return null;
+  const warnings: string[] = [];
+  if (!processState.tmux) {
+    warnings.push(
+      'claude is running here but no ranch- tmux session exists. It was likely started outside ranch — closing it from a stray terminal could surprise you. Use Open terminal to bring it under ranch.',
+    );
+  }
+  if (processState.claudeProcesses.length > 1) {
+    const pids = processState.claudeProcesses.map((p) => p.pid).join(', ');
+    warnings.push(
+      `${processState.claudeProcesses.length} claude processes here (PIDs ${pids}). Possible duplicate session — pick the right one before sending input.`,
+    );
+  }
+  if (warnings.length === 0) return null;
+  return (
+    <div className="card__drift">
+      {warnings.map((m, i) => (
+        <p key={i} className="card__warn">
+          ⚠ {m}
+        </p>
+      ))}
+    </div>
   );
 }
 

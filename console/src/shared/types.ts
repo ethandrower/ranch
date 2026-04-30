@@ -110,6 +110,19 @@ export interface CCProcessState {
   claudeProcesses: ClaudeProcess[];
 }
 
+export interface ProcessSnapshot {
+  /** Per-registered-agent process state. */
+  perAgent: Record<string, CCProcessState>;
+  /**
+   * Claude processes whose cwd doesn't match any registered worktree —
+   * either truly outside the agent fleet (e.g. a manual `claude` in
+   * Documents/) or in an unregistered subproject.
+   */
+  orphanClaudes: ClaudeProcess[];
+  /** Total number of claude processes seen across all categories. */
+  totalClaudes: number;
+}
+
 // ─── CC session state (MVP-3: from ~/.claude/projects/<encoded>/*.jsonl) ─
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed';
@@ -175,7 +188,7 @@ export interface RanchApi {
     session: (agent: string) => Promise<SessionState>;
     git: (agent: string) => Promise<WorktreeGitState>;
     /** Fleet snapshot — one ps + one tmux-list per call, all agents. */
-    processSnapshot: () => Promise<Record<string, CCProcessState>>;
+    processSnapshot: () => Promise<ProcessSnapshot>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
