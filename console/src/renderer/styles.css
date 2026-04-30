@@ -166,6 +166,22 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: copy;
+  font-family-: inherit;
+}
+
+.card__path:hover {
+  color: var(--text-muted);
+}
+
+.card__path:active {
+  color: var(--accent);
 }
 
 .card__branch {
@@ -454,6 +470,18 @@ body,
 .card__action:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.card__action--primary {
+  background: rgba(106, 162, 255, 0.12);
+  border-color: rgba(106, 162, 255, 0.4);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.card__action--primary:hover:not(:disabled) {
+  background: rgba(106, 162, 255, 0.2);
+  border-color: var(--accent);
 }
 
 .card__warn--banner {
