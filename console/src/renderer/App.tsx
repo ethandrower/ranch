@@ -306,6 +306,8 @@ function AutomatedView(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filter, setFilter] = useState<RunFilter>('active');
+  const [cleaningUp, setCleaningUp] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -357,30 +359,78 @@ function AutomatedView(): JSX.Element {
     return runs.filter((r) => ACTIVE_STATUSES.includes(r.status)).length;
   }, [runs]);
 
+  const abandonedCount = useMemo(() => {
+    if (!runs) return 0;
+    return runs.filter((r) => r.status === 'abandoned').length;
+  }, [runs]);
+
   const totalCount = runs?.length ?? 0;
+
+  async function handleCleanup(): Promise<void> {
+    if (cleaningUp) return;
+    const ok = window.confirm(
+      `Mark ${abandonedCount} abandoned run${abandonedCount === 1 ? '' : 's'} as stopped?\n\n` +
+        'This sets state=stopped and exit_reason="cleanup: orchestrator process no longer alive" — ' +
+        'rows stay in the DB but are properly classified as historical.',
+    );
+    if (!ok) return;
+    setCleaningUp(true);
+    try {
+      const n = await window.ranch.runs.cleanupAbandoned();
+      setCleanupResult(`Cleaned up ${n} abandoned run${n === 1 ? '' : 's'}.`);
+      // Force-refresh the list so the operator sees the change instantly
+      const list = await window.ranch.runs.list(100);
+      setRuns(list);
+      setTimeout(() => setCleanupResult(null), 4000);
+    } catch (err) {
+      setCleanupResult(
+        `Cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setCleaningUp(false);
+    }
+  }
 
   return (
     <div className="automated">
       <div className="automated__top">
         <div className="automated__top-row">
           <h2>Automated runs</h2>
-          <div className="automated__filter">
-            <button
-              type="button"
-              className={`automated__filter-btn${filter === 'active' ? ' automated__filter-btn--active' : ''}`}
-              onClick={() => setFilter('active')}
-            >
-              Active · {activeCount}
-            </button>
-            <button
-              type="button"
-              className={`automated__filter-btn${filter === 'all' ? ' automated__filter-btn--active' : ''}`}
-              onClick={() => setFilter('all')}
-            >
-              All · {totalCount}
-            </button>
+          <div className="automated__top-actions">
+            {abandonedCount > 0 && (
+              <button
+                type="button"
+                className="automated__cleanup-btn"
+                onClick={handleCleanup}
+                disabled={cleaningUp}
+                title={`Mark ${abandonedCount} abandoned runs as stopped — they're orchestrator processes that died without cleanup.`}
+              >
+                {cleaningUp
+                  ? 'Cleaning up…'
+                  : `Clean up ${abandonedCount} abandoned`}
+              </button>
+            )}
+            <div className="automated__filter">
+              <button
+                type="button"
+                className={`automated__filter-btn${filter === 'active' ? ' automated__filter-btn--active' : ''}`}
+                onClick={() => setFilter('active')}
+              >
+                Active · {activeCount}
+              </button>
+              <button
+                type="button"
+                className={`automated__filter-btn${filter === 'all' ? ' automated__filter-btn--active' : ''}`}
+                onClick={() => setFilter('all')}
+              >
+                All · {totalCount}
+              </button>
+            </div>
           </div>
         </div>
+        {cleanupResult && (
+          <p className="automated__cleanup-result">{cleanupResult}</p>
+        )}
         <p className="automated__sub">
           Fire-and-forget Claude SDK sessions managed by the Python
           orchestrator. Each row in this list is one historical{' '}

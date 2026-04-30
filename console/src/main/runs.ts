@@ -218,6 +218,50 @@ export async function listRuns(limit = 50): Promise<RunRecord[]> {
   return rows.map(rowToRunRecord);
 }
 
+/**
+ * Mark stale/abandoned runs as stopped. Soft delete: sets state =
+ * 'stopped', records exit_reason and ended_at. Operates on:
+ *
+ *   - any run in an ACTIVE_STATES whose pid is null
+ *   - any run in an ACTIVE_STATES whose pid is no longer a live process
+ *
+ * Returns the number of rows affected.
+ */
+export async function cleanupAbandonedRuns(): Promise<number> {
+  if (!existsSync(DB_PATH)) return 0;
+
+  // Pull candidate rows (active state) and decide which are dead in JS,
+  // since the SQLite shell can't probe process liveness directly.
+  const rows = (await query(
+    `SELECT id, pid FROM runs
+     WHERE state IN (${[...ACTIVE_STATES].map((s) => `'${s}'`).join(',')})`,
+  )) as Record<string, unknown>[];
+
+  const deadIds: number[] = [];
+  for (const row of rows) {
+    const id = asNumber(row['id']);
+    if (id === undefined) continue;
+    const pid = asNumber(row['pid']);
+    if (pid === undefined || !isPidAlive(pid)) deadIds.push(id);
+  }
+
+  if (deadIds.length === 0) return 0;
+
+  // SQL injection isn't a concern here — these are rowids from our own
+  // query above, all integers. But sanitize anyway for paranoia.
+  const idList = deadIds.filter((n) => Number.isInteger(n)).join(',');
+  const reason = 'cleanup: orchestrator process no longer alive';
+  await execFile('/usr/bin/sqlite3', [
+    DB_PATH,
+    `UPDATE runs
+       SET state = 'stopped',
+           ended_at = COALESCE(ended_at, datetime('now')),
+           exit_reason = COALESCE(exit_reason, '${reason}')
+     WHERE id IN (${idList})`,
+  ]);
+  return deadIds.length;
+}
+
 export async function getRun(id: number): Promise<RunDetail | null> {
   const runRows = (await query(
     `SELECT id, agent, ticket, state, dispatch_mode, started_at, ended_at,

@@ -33,6 +33,7 @@ const IPC_CHANNELS = {
   notesSet: 'ranch:notes:set',
   runsList: 'ranch:runs:list',
   runsGet: 'ranch:runs:get',
+  runsCleanupAbandoned: 'ranch:runs:cleanupAbandoned',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -83,6 +84,8 @@ const api: RanchApi = {
   runs: {
     list: (limit) => ipcRenderer.invoke(IPC_CHANNELS.runsList, limit),
     get: (id) => ipcRenderer.invoke(IPC_CHANNELS.runsGet, id),
+    cleanupAbandoned: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.runsCleanupAbandoned),
   },
   terminal: {
     env: () => ipcRenderer.invoke(IPC_CHANNELS.terminalEnv),
