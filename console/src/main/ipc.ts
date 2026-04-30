@@ -25,7 +25,9 @@ import {
   attachTerminal,
   detachTerminal,
   getTerminalEnv,
+  killTmuxSession,
   resizeTerminal,
+  sendKeysToSession,
   writeTerminal,
 } from './pty.js';
 
@@ -45,6 +47,8 @@ export const IPC_CHANNELS = {
   terminalWrite: 'ranch:terminal:write',
   terminalResize: 'ranch:terminal:resize',
   terminalDetach: 'ranch:terminal:detach',
+  terminalKillSession: 'ranch:terminal:killSession',
+  terminalSendKeys: 'ranch:terminal:sendKeys',
   // Push channels (main → renderer). No registration needed in main —
   // we just call webContents.send(...). Listed here for grep-ability.
   terminalData: 'terminal:data',
@@ -173,6 +177,29 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.terminalDetach, (_event, terminalId: unknown) => {
     if (typeof terminalId === 'string') detachTerminal(terminalId);
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.terminalKillSession,
+    async (_event, agent: unknown) => {
+      if (typeof agent !== 'string' || !agent) {
+        throw new Error('terminal.killSession requires an agent name');
+      }
+      await killTmuxSession(agent);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.terminalSendKeys,
+    async (_event, agent: unknown, keys: unknown) => {
+      if (typeof agent !== 'string' || !agent) {
+        throw new Error('terminal.sendKeys requires an agent name');
+      }
+      if (!Array.isArray(keys) || !keys.every((k) => typeof k === 'string')) {
+        throw new Error('terminal.sendKeys requires a string array');
+      }
+      await sendKeysToSession(agent, keys as string[]);
+    },
+  );
 
   ipcMain.handle(IPC_CHANNELS.appVersion, () => app.getVersion());
 

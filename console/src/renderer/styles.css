@@ -339,6 +339,89 @@ body,
   margin-left: auto;
 }
 
+/* ─── Session menu (kebab) ───────────────────────────── */
+
+.session-menu {
+  position: relative;
+}
+
+.session-menu__trigger {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0 0.45rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  height: 1.55rem;
+  line-height: 1;
+  letter-spacing: 0.1em;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.session-menu__trigger:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.session-menu__popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  z-index: 50;
+}
+
+.session-menu__item {
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.session-menu__item:hover {
+  background: rgba(106, 162, 255, 0.12);
+  color: var(--accent);
+}
+
+.session-menu__item--danger {
+  color: var(--red);
+}
+
+.session-menu__item--danger:hover {
+  background: rgba(255, 106, 106, 0.12);
+  color: var(--red);
+}
+
+.cell__action-flash {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: rgba(106, 162, 255, 0.18);
+  color: var(--accent);
+  border: 1px solid rgba(106, 162, 255, 0.45);
+  border-radius: 4px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.72rem;
+  pointer-events: none;
+  z-index: 5;
+  font-weight: 600;
+}
+
 .port-mini {
   background: var(--bg);
   color: var(--accent);

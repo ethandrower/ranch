@@ -245,3 +245,45 @@ export function detachAllForWebContents(wc: WebContents): void {
     }
   }
 }
+
+/**
+ * Kill the underlying tmux session for an agent. Used as the "nuclear"
+ * recovery option when claude is hung — wipes the session so the next
+ * attach creates fresh.
+ *
+ * Force-detaches our pty handle first so we don't keep a dangling client
+ * pointed at a soon-to-be-dead session.
+ */
+export async function killTmuxSession(agent: string): Promise<void> {
+  const tmuxPath = await findTmux();
+  if (!tmuxPath) {
+    throw new Error('tmux is not installed');
+  }
+  const sessionName = `ranch-${agent}`;
+  detachInternal(sessionName, true);
+  try {
+    await execFile(tmuxPath, ['kill-session', '-t', sessionName]);
+  } catch (err) {
+    // Session not found is fine — already gone is the goal.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/can't find session|no server running/i.test(msg)) throw err;
+  }
+}
+
+/**
+ * Send keystrokes (or named tmux keys like `C-c`) to an agent's session.
+ * Lets the operator interrupt or signal claude without killing the
+ * whole session.
+ */
+export async function sendKeysToSession(
+  agent: string,
+  keys: string[],
+): Promise<void> {
+  const tmuxPath = await findTmux();
+  if (!tmuxPath) {
+    throw new Error('tmux is not installed');
+  }
+  const sessionName = `ranch-${agent}`;
+  // -t <session> targets the active window/pane
+  await execFile(tmuxPath, ['send-keys', '-t', sessionName, ...keys]);
+}

@@ -51,6 +51,19 @@ export function App(): JSX.Element {
   const [focusedAgent, setFocusedAgent] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [mode, setMode] = useState<'interactive' | 'automated'>('interactive');
+  // Per-agent generation counter — bumping it forces the Terminal
+  // component to remount, which triggers a fresh tmux attach. Used by
+  // the "Restart Claude" action.
+  const [terminalGenerations, setTerminalGenerations] = useState<
+    Record<string, number>
+  >({});
+
+  const bumpTerminalGeneration = useCallback((agent: string) => {
+    setTerminalGenerations((prev) => ({
+      ...prev,
+      [agent]: (prev[agent] ?? 0) + 1,
+    }));
+  }, []);
 
   // ─── one-shot loads ────────────────────────────────────────
   useEffect(() => {
@@ -208,8 +221,10 @@ export function App(): JSX.Element {
                   note={notes[wt.agent] ?? null}
                   terminalEnv={terminalEnv}
                   focused={focusedAgent === wt.agent}
+                  generation={terminalGenerations[wt.agent] ?? 1}
                   onFocus={() => setFocusedAgent(wt.agent)}
                   onSaveNote={(label) => saveNote(wt.agent, label)}
+                  onBumpGeneration={() => bumpTerminalGeneration(wt.agent)}
                 />
               ))}
           </main>
@@ -826,8 +841,10 @@ interface AgentCellProps {
   note: AgentNote | null;
   terminalEnv: TerminalEnv | null;
   focused: boolean;
+  generation: number;
   onFocus: () => void;
   onSaveNote: (label: string) => void;
+  onBumpGeneration: () => void;
 }
 
 function AgentCell({
@@ -836,11 +853,65 @@ function AgentCell({
   note,
   terminalEnv,
   focused,
+  generation,
   onFocus,
   onSaveNote,
+  onBumpGeneration,
 }: AgentCellProps): JSX.Element {
   const [session, setSession] = useState<SessionState | null>(null);
   const [git, setGit] = useState<WorktreeGitState | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  async function sendCtrlC(): Promise<void> {
+    try {
+      await window.ranch.terminal.sendKeys(worktree.agent, ['C-c']);
+      flashMessage('Ctrl-C sent');
+    } catch (err) {
+      flashMessage(
+        `Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async function restartClaude(): Promise<void> {
+    const ok = window.confirm(
+      `Restart Claude in ranch-${worktree.agent}?\n\n` +
+        'This kills the tmux session and creates a fresh one running ' +
+        '`claude`. Any unsaved scrollback will be lost.',
+    );
+    if (!ok) return;
+    try {
+      await window.ranch.terminal.killSession(worktree.agent);
+      onBumpGeneration();
+      flashMessage('Restarting…');
+    } catch (err) {
+      flashMessage(
+        `Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async function killSession(): Promise<void> {
+    const ok = window.confirm(
+      `Kill the ranch-${worktree.agent} tmux session?\n\n` +
+        'The terminal will be empty until you click "Open Claude" again. ' +
+        'Useful when claude AND its host shell are both hung.',
+    );
+    if (!ok) return;
+    try {
+      await window.ranch.terminal.killSession(worktree.agent);
+      flashMessage('Session killed');
+    } catch (err) {
+      flashMessage(
+        `Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  function flashMessage(msg: string): void {
+    setActionMessage(msg);
+    setTimeout(() => setActionMessage(null), 2500);
+  }
 
   // Per-cell transcript polling.
   useEffect(() => {
@@ -904,14 +975,20 @@ function AgentCell({
         git={git}
         note={note}
         onSaveNote={onSaveNote}
+        onSendCtrlC={sendCtrlC}
+        onRestartClaude={restartClaude}
+        onKillSession={killSession}
       />
       <div className="cell__terminal">
         {terminalEnv && terminalEnv.tmuxAvailable ? (
-          <Terminal agent={worktree.agent} generation={1} />
+          <Terminal agent={worktree.agent} generation={generation} />
         ) : (
           <p className="placeholder placeholder--center">
             tmux not installed — terminals unavailable
           </p>
+        )}
+        {actionMessage && (
+          <div className="cell__action-flash">{actionMessage}</div>
         )}
       </div>
     </article>
@@ -927,6 +1004,9 @@ function CellHeader({
   git,
   note,
   onSaveNote,
+  onSendCtrlC,
+  onRestartClaude,
+  onKillSession,
 }: {
   worktree: WorktreeBasics;
   session: SessionState | null;
@@ -934,6 +1014,9 @@ function CellHeader({
   git: WorktreeGitState | null;
   note: AgentNote | null;
   onSaveNote: (label: string) => void;
+  onSendCtrlC: () => void;
+  onRestartClaude: () => void;
+  onKillSession: () => void;
 }): JSX.Element {
   return (
     <header className="cell__header">
@@ -942,6 +1025,11 @@ function CellHeader({
         <SessionPill session={session} processState={processState} />
         <GitInline git={git} session={session} />
         <PortsInline ports={worktree.ports} />
+        <SessionMenu
+          onSendCtrlC={onSendCtrlC}
+          onRestartClaude={onRestartClaude}
+          onKillSession={onKillSession}
+        />
       </div>
       <div className="cell__notes">
         <EditableNote
@@ -952,6 +1040,95 @@ function CellHeader({
         <ActivityLine session={session} />
       </div>
     </header>
+  );
+}
+
+// ─── Session controls menu (kebab) ────────────────────────────
+
+function SessionMenu({
+  onSendCtrlC,
+  onRestartClaude,
+  onKillSession,
+}: {
+  onSendCtrlC: () => void;
+  onRestartClaude: () => void;
+  onKillSession: () => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent): void {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  function run(action: () => void): void {
+    setOpen(false);
+    action();
+  }
+
+  return (
+    <div className="session-menu" ref={containerRef}>
+      <button
+        type="button"
+        className="session-menu__trigger"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title="Session controls"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className="session-menu__popover" role="menu">
+          <button
+            type="button"
+            className="session-menu__item"
+            onClick={(e) => {
+              e.stopPropagation();
+              run(onSendCtrlC);
+            }}
+            title="Send Ctrl-C to interrupt the running command"
+          >
+            Send Ctrl-C
+          </button>
+          <button
+            type="button"
+            className="session-menu__item"
+            onClick={(e) => {
+              e.stopPropagation();
+              run(onRestartClaude);
+            }}
+            title="Kill tmux session and start a fresh one running claude"
+          >
+            Restart Claude
+          </button>
+          <button
+            type="button"
+            className="session-menu__item session-menu__item--danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              run(onKillSession);
+            }}
+            title="Kill tmux session entirely (next attach starts fresh)"
+          >
+            Kill session
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
