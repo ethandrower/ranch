@@ -20,6 +20,7 @@ import { getActiveSession } from './transcript.js';
 import { getWorktreeGitState } from './git.js';
 import { snapshotProcessState } from './process.js';
 import { getAllNotes, setNote } from './notes.js';
+import { listRuns, getRun } from './runs.js';
 import {
   attachTerminal,
   detachTerminal,
@@ -36,6 +37,8 @@ export const IPC_CHANNELS = {
   worktreesProcessSnapshot: 'ranch:worktrees:processSnapshot',
   notesGetAll: 'ranch:notes:getAll',
   notesSet: 'ranch:notes:set',
+  runsList: 'ranch:runs:list',
+  runsGet: 'ranch:runs:get',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -100,6 +103,18 @@ export function registerIpcHandlers(): void {
       return setNote(agent, label);
     },
   );
+
+  ipcMain.handle(IPC_CHANNELS.runsList, async (_event, limit: unknown) => {
+    const n = typeof limit === 'number' ? limit : 50;
+    return listRuns(n);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.runsGet, async (_event, id: unknown) => {
+    if (typeof id !== 'number') {
+      throw new Error('runs.get requires a numeric id');
+    }
+    return getRun(id);
+  });
 
   ipcMain.handle(IPC_CHANNELS.terminalEnv, async () => getTerminalEnv());
 

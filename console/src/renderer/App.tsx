@@ -10,6 +10,9 @@ import type {
   AgentNote,
   CCProcessState,
   ProcessSnapshot,
+  RunDetail,
+  RunRecord,
+  RunStatus,
   SessionState,
   TerminalEnv,
   WorktreeBasics,
@@ -268,93 +271,190 @@ function ModeTabs({
   );
 }
 
-// ─── AutomatedView (stub) ─────────────────────────────────────
+// ─── AutomatedView (live data from ~/.ranch/ranch.db) ─────────
+
+const RUNS_POLL_MS = 5000;
+
+const STATUS_ORDER: Record<RunStatus, number> = {
+  awaiting_approval: 0,
+  blocked: 1,
+  working: 2,
+  planning: 3,
+  queued: 4,
+  done: 5,
+  stopped: 6,
+  unknown: 7,
+};
 
 function AutomatedView(): JSX.Element {
+  const [runs, setRuns] = useState<RunRecord[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const list = await window.ranch.runs.list(50);
+        if (!cancelled) {
+          setRuns(list);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, RUNS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, []);
+
+  const sortedRuns = useMemo(() => {
+    if (!runs) return null;
+    return [...runs].sort((a, b) => {
+      const sa = STATUS_ORDER[a.status] ?? 99;
+      const sb = STATUS_ORDER[b.status] ?? 99;
+      if (sa !== sb) return sa - sb;
+      return b.id - a.id;
+    });
+  }, [runs]);
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    if (runs) {
+      for (const r of runs) c[r.status] = (c[r.status] ?? 0) + 1;
+    }
+    return c;
+  }, [runs]);
+
   return (
     <div className="automated">
-      <div className="automated__intro">
+      <div className="automated__top">
         <h2>Automated runs</h2>
-        <p>
-          Fire-and-forget Claude SDK sessions running in the background. Each
-          run shows up as a card here with its current status —{' '}
-          <em>planning</em>, <em>working</em>, <em>awaiting approval</em>,{' '}
-          <em>done</em>, or <em>blocked</em>. The console bubbles up which ones
-          need your input or review so nothing falls through.
+        <p className="automated__sub">
+          Fire-and-forget Claude SDK sessions managed by the Python
+          orchestrator. Lifecycle controls (<code>approve</code>,{' '}
+          <code>reject</code>, <code>stop</code>) still happen via{' '}
+          <code>ranch &lt;cmd&gt; &lt;run_id&gt;</code> in your terminal — UI
+          buttons coming next.
         </p>
-        <p className="automated__hint">
-          The Python orchestrator already powers this — see{' '}
-          <code>ranch dispatch</code>, <code>ranch runs</code>,{' '}
-          <code>ranch approve</code>. Wiring that data into this view is the
-          next PR.
-        </p>
-      </div>
-
-      <div className="automated__demo">
-        <h3>What the run cards will look like</h3>
-        <div className="automated__cards">
-          <DemoRunCard
-            agent="max"
-            ticket="ECD-1234"
-            brief="Add /healthz endpoint with status checks"
-            status="awaiting_approval"
-            ageMin={2}
-          />
-          <DemoRunCard
-            agent="jeffy"
-            ticket="ECD-9988"
-            brief="Migrate legacy export job to celery beat"
-            status="working"
-            ageMin={14}
-          />
-          <DemoRunCard
-            agent="arnold"
-            ticket="ECD-1471"
-            brief="Fix flaky test_export_csv"
-            status="done"
-            ageMin={37}
-          />
-          <DemoRunCard
-            agent="kesha"
-            ticket="ECD-1502"
-            brief="Investigate slow AE-table query"
-            status="blocked"
-            ageMin={62}
-          />
+        <div className="automated__counts">
+          {Object.entries(counts).map(([status, n]) => (
+            <span
+              key={status}
+              className={`pill run-pill run-pill--${status}`}
+              title={`${n} ${status.replace('_', ' ')}`}
+            >
+              {statusLabel(status as RunStatus)} · {n}
+            </span>
+          ))}
         </div>
       </div>
+
+      {error && (
+        <p className="placeholder placeholder--error">
+          Couldn&apos;t read ~/.ranch/ranch.db: {error}
+        </p>
+      )}
+
+      {sortedRuns === null && !error && (
+        <p className="placeholder">Loading runs…</p>
+      )}
+
+      {sortedRuns && sortedRuns.length === 0 && (
+        <div className="placeholder">
+          No automated runs yet. Dispatch one from a terminal:
+          <pre className="automated__empty-hint">
+            ranch dispatch &lt;agent&gt; --ticket &lt;ID&gt; --brief
+            &quot;...&quot;
+          </pre>
+        </div>
+      )}
+
+      {sortedRuns && sortedRuns.length > 0 && (
+        <div className="automated__cards">
+          {sortedRuns.map((run) => (
+            <RunCard
+              key={run.id}
+              run={run}
+              selected={selectedId === run.id}
+              onSelect={() => setSelectedId(run.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {selectedId !== null && (
+        <RunDetailModal
+          runId={selectedId}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </div>
   );
 }
 
-function DemoRunCard({
-  agent,
-  ticket,
-  brief,
-  status,
-  ageMin,
+function RunCard({
+  run,
+  selected,
+  onSelect,
 }: {
-  agent: string;
-  ticket: string;
-  brief: string;
-  status: 'planning' | 'working' | 'awaiting_approval' | 'done' | 'blocked';
-  ageMin: number;
+  run: RunRecord;
+  selected: boolean;
+  onSelect: () => void;
 }): JSX.Element {
+  const ageRef = run.endedAt ?? run.startedAt;
+  const ageStr = relativeAge(ageRef);
+  const actionHint =
+    run.status === 'awaiting_approval'
+      ? 'click to review →'
+      : run.status === 'blocked'
+        ? 'needs unblock →'
+        : null;
   return (
-    <article className={`run-card run-card--${status}`}>
+    <article
+      className={`run-card run-card--${run.status}${selected ? ' run-card--selected' : ''}`}
+      onClick={onSelect}
+    >
       <header className="run-card__head">
-        <span className="run-card__agent">{agent}</span>
-        <span className="run-card__ticket">{ticket}</span>
-        <RunStatusPill status={status} />
+        <span className="run-card__agent">{run.agent}</span>
+        {run.ticket && <span className="run-card__ticket">{run.ticket}</span>}
+        <RunStatusPill status={run.status} rawState={run.rawState} />
+        <span className="run-card__id" title={`Run ID ${run.id}`}>
+          #{run.id}
+        </span>
       </header>
-      <p className="run-card__brief">{brief}</p>
+      <p className="run-card__brief">
+        {run.brief || <em className="run-card__brief-empty">no brief</em>}
+      </p>
       <footer className="run-card__foot">
-        <span className="run-card__age">last update {ageMin}m ago</span>
-        {status === 'awaiting_approval' && (
-          <span className="run-card__action-hint">click to review →</span>
+        <span className="run-card__age">
+          {run.endedAt ? `ended ${ageStr} ago` : `started ${ageStr} ago`}
+        </span>
+        {run.dispatchMode === 'background' && (
+          <span className="run-card__mode">bg</span>
         )}
-        {status === 'blocked' && (
-          <span className="run-card__action-hint">needs unblock →</span>
+        {run.prUrl && (
+          <a
+            className="run-card__pr"
+            href={run.prUrl}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              void window.ranch.app.openExternal(run.prUrl!);
+            }}
+            title={run.prUrl}
+          >
+            PR ↗
+          </a>
+        )}
+        {actionHint && (
+          <span className="run-card__action-hint">{actionHint}</span>
         )}
       </footer>
     </article>
@@ -363,20 +463,203 @@ function DemoRunCard({
 
 function RunStatusPill({
   status,
+  rawState,
 }: {
-  status: 'planning' | 'working' | 'awaiting_approval' | 'done' | 'blocked';
+  status: RunStatus;
+  rawState?: string;
 }): JSX.Element {
-  const labels = {
-    planning: 'planning',
-    working: 'working',
-    awaiting_approval: 'needs approval',
-    done: 'done',
-    blocked: 'blocked',
-  };
   return (
-    <span className={`pill run-pill run-pill--${status}`}>
-      {labels[status]}
+    <span
+      className={`pill run-pill run-pill--${status}`}
+      title={rawState ? `orchestrator state: ${rawState}` : undefined}
+    >
+      {statusLabel(status)}
     </span>
+  );
+}
+
+function statusLabel(status: RunStatus): string {
+  switch (status) {
+    case 'awaiting_approval':
+      return 'needs approval';
+    case 'unknown':
+      return '?';
+    default:
+      return status;
+  }
+}
+
+// ─── Run detail modal ─────────────────────────────────────────
+
+function RunDetailModal({
+  runId,
+  onClose,
+}: {
+  runId: number;
+  onClose: () => void;
+}): JSX.Element {
+  const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const d = await window.ranch.runs.get(runId);
+        if (!cancelled) {
+          setDetail(d);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [runId]);
+
+  return (
+    <div className="run-modal__backdrop" onClick={onClose}>
+      <div className="run-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="run-modal__head">
+          <h3>Run #{runId}</h3>
+          <button type="button" className="run-modal__close" onClick={onClose}>
+            ✕
+          </button>
+        </header>
+        {error && (
+          <p className="placeholder placeholder--error">Error: {error}</p>
+        )}
+        {!error && !detail && (
+          <p className="placeholder">Loading run detail…</p>
+        )}
+        {detail && (
+          <div className="run-modal__body">
+            <DetailSection title="Run">
+              <DetailRow label="agent" value={detail.agent} mono />
+              {detail.ticket && (
+                <DetailRow label="ticket" value={detail.ticket} mono />
+              )}
+              <DetailRow
+                label="status"
+                value={`${statusLabel(detail.status)} (${detail.rawState})`}
+              />
+              <DetailRow label="dispatch" value={detail.dispatchMode} />
+              {detail.startedAt && (
+                <DetailRow
+                  label="started"
+                  value={`${relativeAge(detail.startedAt)} ago`}
+                />
+              )}
+              {detail.endedAt && (
+                <DetailRow
+                  label="ended"
+                  value={`${relativeAge(detail.endedAt)} ago`}
+                />
+              )}
+              {detail.branchName && (
+                <DetailRow label="branch" value={detail.branchName} mono />
+              )}
+              {detail.pid !== undefined && (
+                <DetailRow label="pid" value={String(detail.pid)} mono />
+              )}
+              {detail.prUrl && (
+                <div className="detail__row">
+                  <span className="detail__row-label">PR</span>
+                  <a
+                    className="detail__pr-link"
+                    href={detail.prUrl}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void window.ranch.app.openExternal(detail.prUrl!);
+                    }}
+                  >
+                    {detail.prUrl} ↗
+                  </a>
+                </div>
+              )}
+            </DetailSection>
+
+            {detail.initialPrompt && (
+              <DetailSection title="Brief">
+                <p className="detail__text">{detail.initialPrompt}</p>
+              </DetailSection>
+            )}
+
+            <DetailSection
+              title="Checkpoints"
+              count={detail.checkpoints.length}
+            >
+              {detail.checkpoints.length === 0 ? (
+                <p className="detail__empty">no checkpoints recorded</p>
+              ) : (
+                <ul className="run-cps">
+                  {detail.checkpoints.map((cp) => (
+                    <li key={cp.id} className={`run-cp run-cp--${cp.decision}`}>
+                      <span className="run-cp__kind">{cp.kind}</span>
+                      <span
+                        className={`run-cp__decision run-cp__decision--${cp.decision}`}
+                      >
+                        {cp.decision}
+                      </span>
+                      {cp.summary && (
+                        <span className="run-cp__summary">{cp.summary}</span>
+                      )}
+                      {cp.decisionNote && (
+                        <span className="run-cp__note">
+                          — {cp.decisionNote}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DetailSection>
+
+            {detail.interjections.length > 0 && (
+              <DetailSection
+                title="Interjections"
+                count={detail.interjections.length}
+              >
+                <ul className="run-cps">
+                  {detail.interjections.map((inj) => (
+                    <li key={inj.id} className="run-cp">
+                      <span className="run-cp__kind">{inj.kind}</span>
+                      {inj.processedAt && (
+                        <span className="run-cp__decision run-cp__decision--approved">
+                          processed
+                        </span>
+                      )}
+                      {inj.content && (
+                        <span className="run-cp__summary">{inj.content}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </DetailSection>
+            )}
+
+            <DetailSection title="Lifecycle (CLI)">
+              <p className="detail__empty">
+                Approve / reject / stop via terminal until UI buttons land:
+              </p>
+              <pre className="run-modal__cli">
+                ranch approve {runId}
+                {'\n'}ranch reject {runId} &quot;reason&quot;
+                {'\n'}ranch note {runId} &quot;note text&quot;
+                {'\n'}ranch stop {runId}
+              </pre>
+            </DetailSection>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -31,6 +31,8 @@ const IPC_CHANNELS = {
   worktreesProcessSnapshot: 'ranch:worktrees:processSnapshot',
   notesGetAll: 'ranch:notes:getAll',
   notesSet: 'ranch:notes:set',
+  runsList: 'ranch:runs:list',
+  runsGet: 'ranch:runs:get',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -77,6 +79,10 @@ const api: RanchApi = {
     getAll: () => ipcRenderer.invoke(IPC_CHANNELS.notesGetAll),
     set: (agent, label) =>
       ipcRenderer.invoke(IPC_CHANNELS.notesSet, agent, label),
+  },
+  runs: {
+    list: (limit) => ipcRenderer.invoke(IPC_CHANNELS.runsList, limit),
+    get: (id) => ipcRenderer.invoke(IPC_CHANNELS.runsGet, id),
   },
   terminal: {
     env: () => ipcRenderer.invoke(IPC_CHANNELS.terminalEnv),
