@@ -19,7 +19,15 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionState, TodoItem, TodoStatus } from '../shared/types.js';
+import type {
+  SessionRunState,
+  SessionState,
+  TodoItem,
+  TodoStatus,
+} from '../shared/types.js';
+
+const ACTIVE_WINDOW_MS = 5_000;
+const IDLE_THRESHOLD_MS = 5 * 60_000;
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 
@@ -170,13 +178,102 @@ interface TranscriptScan {
   lastUserPrompt?: string;
   lastActivityAt?: string;
   gitBranch?: string;
+  runState: SessionRunState;
+}
+
+/**
+ * Pull the tool_use IDs from an assistant entry's content blocks.
+ */
+function extractAssistantToolUseIds(entry: Record<string, unknown>): string[] {
+  if (entry['type'] !== 'assistant') return [];
+  const ids: string[] = [];
+  for (const block of getMessageContent(entry)) {
+    const obj = asObject(block);
+    if (!obj) continue;
+    if (obj['type'] !== 'tool_use') continue;
+    const id = asString(obj['id']);
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Pull tool_result IDs that this user entry is responding to. CC writes
+ * these as `type: user` with a `content` array containing tool_result
+ * blocks (each carrying `tool_use_id`).
+ */
+function extractToolResultIds(entry: Record<string, unknown>): string[] {
+  if (entry['type'] !== 'user') return [];
+  const ids: string[] = [];
+  for (const block of getMessageContent(entry)) {
+    const obj = asObject(block);
+    if (!obj) continue;
+    if (obj['type'] !== 'tool_result') continue;
+    const id = asString(obj['tool_use_id']);
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Decide what state the session is in based on the latest assistant turn,
+ * subsequent tool results, and how long ago the last entry was written.
+ */
+function inferRunState(
+  entries: ParsedEntry[],
+  lastActivityAt: string | undefined,
+  now: number,
+): SessionRunState {
+  if (entries.length === 0) return 'unknown';
+
+  const lastTs = lastActivityAt ? Date.parse(lastActivityAt) : NaN;
+  const ageMs = Number.isFinite(lastTs) ? now - lastTs : Infinity;
+
+  // Find the latest assistant entry.
+  let latestAssistantIdx = -1;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i]!.raw['type'] === 'assistant') {
+      latestAssistantIdx = i;
+      break;
+    }
+  }
+  if (latestAssistantIdx < 0) {
+    // No assistant entries seen — typically means user just opened a session.
+    return ageMs < ACTIVE_WINDOW_MS ? 'active' : 'idle';
+  }
+
+  // Tool uses requested in the latest assistant turn.
+  const toolUseIds = extractAssistantToolUseIds(
+    entries[latestAssistantIdx]!.raw,
+  );
+
+  if (toolUseIds.length > 0) {
+    // Walk forward looking for matching tool_results.
+    const responded = new Set<string>();
+    for (let i = latestAssistantIdx + 1; i < entries.length; i++) {
+      for (const id of extractToolResultIds(entries[i]!.raw)) {
+        responded.add(id);
+      }
+    }
+    const allAnswered = toolUseIds.every((id) => responded.has(id));
+    if (!allAnswered) {
+      // Tool call queued without a result yet — claude is mid-work
+      // (or the tool's hung; either way, not "awaiting input").
+      return 'tool_in_flight';
+    }
+  }
+
+  // Latest assistant turn either had no tools or all tools resolved.
+  if (ageMs < ACTIVE_WINDOW_MS) return 'active';
+  if (ageMs < IDLE_THRESHOLD_MS) return 'awaiting_input';
+  return 'idle';
 }
 
 /**
  * Walk entries newest → oldest. Stop early once we have everything.
  */
 function scanEntries(entries: ParsedEntry[]): TranscriptScan {
-  const result: TranscriptScan = { todos: [] };
+  const result: TranscriptScan = { todos: [], runState: 'unknown' };
   let foundTodos = false;
   let foundPrompt = false;
 
@@ -215,6 +312,8 @@ function scanEntries(entries: ParsedEntry[]): TranscriptScan {
       break;
     }
   }
+
+  result.runState = inferRunState(entries, result.lastActivityAt, Date.now());
   return result;
 }
 
@@ -223,11 +322,11 @@ export async function getActiveSession(
 ): Promise<SessionState> {
   const dir = projectsDirFor(worktreePath);
   if (!dir) {
-    return { status: 'none', todos: [] };
+    return { status: 'none', todos: [], runState: 'unknown' };
   }
   const newest = await findMostRecentSession(dir);
   if (!newest) {
-    return { status: 'none', todos: [] };
+    return { status: 'none', todos: [], runState: 'unknown' };
   }
   const raw = await readFile(newest.path, 'utf8');
   const entries: ParsedEntry[] = [];
@@ -241,6 +340,7 @@ export async function getActiveSession(
     sessionId: newest.sessionId,
     transcriptPath: newest.path,
     todos: scan.todos,
+    runState: scan.runState,
   };
   if (scan.lastActivityAt !== undefined)
     state.lastActivityAt = scan.lastActivityAt;

@@ -123,6 +123,24 @@ body,
   flex-direction: column;
   gap: 0.4rem;
   font-size: 0.85rem;
+  position: relative;
+  transition: border-color 0.2s ease;
+}
+
+.card--needs-input {
+  border-color: rgba(246, 193, 119, 0.55);
+  box-shadow: 0 0 0 1px rgba(246, 193, 119, 0.2);
+}
+
+.card--needs-input::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 3px;
+  background: var(--yellow);
+  border-radius: 6px 0 0 6px;
 }
 
 .card__header {
@@ -292,6 +310,13 @@ body,
   background: rgba(92, 212, 122, 0.18);
   color: var(--green);
   border-color: rgba(92, 212, 122, 0.45);
+}
+
+.pill--awaiting {
+  background: rgba(246, 193, 119, 0.18);
+  color: var(--yellow);
+  border-color: rgba(246, 193, 119, 0.5);
+  font-weight: 600;
 }
 
 .pill--active {

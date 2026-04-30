@@ -8,13 +8,13 @@ import type {
   WorktreeBasics,
   WorktreeGitState,
 } from '../shared/types.js';
+import { Terminal } from './Terminal.js';
 
 const EMPTY_SNAPSHOT: ProcessSnapshot = {
   perAgent: {},
   orphanClaudes: [],
   totalClaudes: 0,
 };
-import { Terminal } from './Terminal.js';
 
 const SESSION_POLL_MS = 4000;
 const PROCESS_POLL_MS = 5000;
@@ -324,8 +324,12 @@ function WorktreeCard({
     };
   }, [worktree.agent]);
 
+  const needsInput =
+    (processState?.claudeRunning ?? false) &&
+    session?.runState === 'awaiting_input';
+
   return (
-    <article className="card">
+    <article className={`card${needsInput ? ' card--needs-input' : ''}`}>
       {/* Identity */}
       <header className="card__header">
         <div className="card__identity">
@@ -441,8 +445,31 @@ function SessionPill({
   error: string | null;
 }): JSX.Element {
   if (error) return <span className="pill pill--error">err</span>;
-  // Process state is the strongest signal — claude is or isn't running now.
-  if (processState?.claudeRunning) {
+
+  // Combine process detection with transcript-derived run state for the
+  // strongest possible "what's claude doing right now" signal.
+  const claudeAlive = processState?.claudeRunning ?? false;
+  const runState = session?.runState ?? 'unknown';
+
+  if (claudeAlive && runState === 'awaiting_input') {
+    const age = relativeAge(session?.lastActivityAt);
+    return (
+      <span
+        className="pill pill--awaiting"
+        title="Claude is waiting on a human reply"
+      >
+        needs input · {age}
+      </span>
+    );
+  }
+  if (claudeAlive && runState === 'tool_in_flight') {
+    return (
+      <span className="pill pill--running" title="Claude is mid-tool-call">
+        working
+      </span>
+    );
+  }
+  if (claudeAlive) {
     return <span className="pill pill--running">claude running</span>;
   }
   if (!session) return <span className="pill">…</span>;

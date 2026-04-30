@@ -133,6 +133,25 @@ export interface TodoItem {
   status: TodoStatus;
 }
 
+/**
+ * Inferred state of the latest CC session, derived from the transcript tail:
+ *
+ *   - 'active'         very recent activity (assistant just spoke, < ~5s)
+ *   - 'tool_in_flight' assistant kicked off a tool call and we haven't seen
+ *                      its result yet — claude is doing work
+ *   - 'awaiting_input' assistant has spoken (text-only or all tools resolved)
+ *                      and the transcript has been quiet — claude is waiting
+ *                      on a human reply
+ *   - 'idle'           nothing recent at all (transcript stale > ~5min)
+ *   - 'unknown'        couldn't determine (parse failures, no entries)
+ */
+export type SessionRunState =
+  | 'active'
+  | 'tool_in_flight'
+  | 'awaiting_input'
+  | 'idle'
+  | 'unknown';
+
 export interface SessionState {
   /** 'active' = transcript exists; 'none' = no transcript directory */
   status: 'active' | 'none';
@@ -147,6 +166,8 @@ export interface SessionState {
   todos: TodoItem[];
   /** Branch CC was on at the latest entry (assistant entries include `gitBranch`) */
   gitBranch?: string;
+  /** Inferred run state — see SessionRunState */
+  runState: SessionRunState;
 }
 
 // ─── Terminal (MVP-6) ────────────────────────────────────────────────────
