@@ -39,6 +39,8 @@ const IPC_CHANNELS = {
   terminalWrite: 'ranch:terminal:write',
   terminalResize: 'ranch:terminal:resize',
   terminalDetach: 'ranch:terminal:detach',
+  terminalKillSession: 'ranch:terminal:killSession',
+  terminalSendKeys: 'ranch:terminal:sendKeys',
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
   appVersion: 'ranch:app:version',
@@ -97,6 +99,10 @@ const api: RanchApi = {
       ipcRenderer.invoke(IPC_CHANNELS.terminalResize, terminalId, cols, rows),
     detach: (terminalId) =>
       ipcRenderer.invoke(IPC_CHANNELS.terminalDetach, terminalId),
+    killSession: (agent) =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalKillSession, agent),
+    sendKeys: (agent, keys) =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalSendKeys, agent, keys),
     onData: (handler) =>
       subscribe<TerminalDataEvent>(IPC_CHANNELS.terminalData, handler),
     onExit: (handler) =>

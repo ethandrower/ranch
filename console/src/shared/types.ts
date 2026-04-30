@@ -346,6 +346,13 @@ export interface RanchApi {
     write: (terminalId: string, data: string) => Promise<void>;
     resize: (terminalId: string, cols: number, rows: number) => Promise<void>;
     detach: (terminalId: string) => Promise<void>;
+    /** Kill the tmux session for an agent (recovery from hangs). */
+    killSession: (agent: string) => Promise<void>;
+    /**
+     * Send keys to an agent's tmux session — accepts both plain strings
+     * and tmux key names like `C-c`, `Enter`, `Escape`.
+     */
+    sendKeys: (agent: string, keys: string[]) => Promise<void>;
     onData: (handler: (event: TerminalDataEvent) => void) => Unsubscribe;
     onExit: (handler: (event: TerminalExitEvent) => void) => Unsubscribe;
   };
