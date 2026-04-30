@@ -187,6 +187,40 @@ export interface SessionState {
   runState: SessionRunState;
 }
 
+// ─── Docker (per-agent compose stacks) ───────────────────────────────────
+
+export interface DockerEnv {
+  dockerAvailable: boolean;
+  dockerPath?: string;
+}
+
+export interface DockerContainer {
+  id: string;
+  name: string;
+  image: string;
+  /** "running", "exited", "restarting", "paused", "created", "dead", … */
+  state: string;
+  /** Human-readable line like "Up 23 hours (healthy)" */
+  status: string;
+  project: string;
+  service?: string;
+  /** Raw Ports column, e.g. "0.0.0.0:8003->8000/tcp" */
+  ports?: string;
+}
+
+export interface DockerStackSnapshot {
+  available: boolean;
+  perAgent: Record<string, DockerContainer[]>;
+  /** citemed_shared stack (postgres, redis, etc.) */
+  shared: DockerContainer[];
+}
+
+export interface ComposeRunResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}
+
 // ─── Notes (operator-owned per-agent labels) ─────────────────────────────
 
 export interface AgentNote {
@@ -366,6 +400,15 @@ export interface RanchApi {
     revealInFinder: (path: string) => Promise<void>;
     /** Open a URL in the user's default browser (or whatever shell handles it). */
     openExternal: (url: string) => Promise<void>;
+  };
+  docker: {
+    env: () => Promise<DockerEnv>;
+    /** Fleet snapshot — one `docker ps` per call, all agents + shared. */
+    snapshot: () => Promise<DockerStackSnapshot>;
+    up: (agent: string) => Promise<ComposeRunResult>;
+    down: (agent: string) => Promise<ComposeRunResult>;
+    restart: (agent: string) => Promise<ComposeRunResult>;
+    logs: (agent: string, tail?: number) => Promise<ComposeRunResult>;
   };
 }
 

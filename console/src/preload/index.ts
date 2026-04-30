@@ -50,6 +50,12 @@ const IPC_CHANNELS = {
   appVersion: 'ranch:app:version',
   appRevealInFinder: 'ranch:app:revealInFinder',
   appOpenExternal: 'ranch:app:openExternal',
+  dockerEnv: 'ranch:docker:env',
+  dockerSnapshot: 'ranch:docker:snapshot',
+  dockerUp: 'ranch:docker:up',
+  dockerDown: 'ranch:docker:down',
+  dockerRestart: 'ranch:docker:restart',
+  dockerLogs: 'ranch:docker:logs',
 } as const;
 
 /**
@@ -124,6 +130,15 @@ const api: RanchApi = {
       ipcRenderer.invoke(IPC_CHANNELS.appRevealInFinder, path),
     openExternal: (url) =>
       ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
+  },
+  docker: {
+    env: () => ipcRenderer.invoke(IPC_CHANNELS.dockerEnv),
+    snapshot: () => ipcRenderer.invoke(IPC_CHANNELS.dockerSnapshot),
+    up: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerUp, agent),
+    down: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerDown, agent),
+    restart: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerRestart, agent),
+    logs: (agent, tail) =>
+      ipcRenderer.invoke(IPC_CHANNELS.dockerLogs, agent, tail),
   },
 };
 
