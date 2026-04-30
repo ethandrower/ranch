@@ -169,6 +169,53 @@ body,
   color: var(--text-muted);
 }
 
+.card__git {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.78rem;
+}
+
+.card__git-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.card__git-dirty {
+  color: var(--yellow);
+  font-size: 0.85em;
+}
+
+.card__git-ahead-behind {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  letter-spacing: -0.02em;
+}
+
+.card__git-commit {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card__git-commit code {
+  background: var(--bg-elevated);
+  padding: 0.05rem 0.3rem;
+  border-radius: 2px;
+  font-size: 0.95em;
+  color: var(--accent);
+}
+
+.card__git-age {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 .card__ticket {
   background: rgba(106, 162, 255, 0.15);
   color: var(--accent);
@@ -213,10 +260,16 @@ body,
   white-space: nowrap;
 }
 
-.pill--active {
-  background: rgba(92, 212, 122, 0.12);
+.pill--running {
+  background: rgba(92, 212, 122, 0.18);
   color: var(--green);
-  border-color: rgba(92, 212, 122, 0.3);
+  border-color: rgba(92, 212, 122, 0.45);
+}
+
+.pill--active {
+  background: rgba(106, 162, 255, 0.12);
+  color: var(--accent);
+  border-color: rgba(106, 162, 255, 0.3);
 }
 
 .pill--idle {
@@ -293,6 +346,35 @@ body,
 }
 
 .todo--pending .todo__icon {
+  color: var(--text-dim);
+}
+
+/* ─── Process badges ───────────────────────────────────────────── */
+
+.card__procs {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.05rem;
+}
+
+.proc-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  letter-spacing: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.proc-badge--ok {
+  color: var(--green);
+  border-color: rgba(92, 212, 122, 0.3);
+  background: rgba(92, 212, 122, 0.06);
+}
+
+.proc-badge--off {
   color: var(--text-dim);
 }
 
