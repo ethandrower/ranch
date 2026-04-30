@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type {
   AgentNote,
   CCProcessState,
@@ -39,6 +46,7 @@ export function App(): JSX.Element {
     useState<ProcessSnapshot>(EMPTY_SNAPSHOT);
   const [notes, setNotes] = useState<Record<string, AgentNote>>({});
   const [focusedAgent, setFocusedAgent] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
   // ─── one-shot loads ────────────────────────────────────────
   useEffect(() => {
@@ -144,6 +152,11 @@ export function App(): JSX.Element {
     }
   }, []);
 
+  const focusedWorktree =
+    focusedAgent !== null
+      ? (state.worktrees.find((w) => w.agent === focusedAgent) ?? null)
+      : null;
+
   return (
     <div className="app">
       <header className="app__header">
@@ -157,28 +170,57 @@ export function App(): JSX.Element {
             ⚠ tmux not found — install with <code>brew install tmux</code>
           </span>
         )}
+        <button
+          type="button"
+          className={`sidebar-toggle${sidebarOpen ? ' sidebar-toggle--open' : ''}`}
+          onClick={() => setSidebarOpen((v) => !v)}
+          title={sidebarOpen ? 'Hide detail sidebar' : 'Show detail sidebar'}
+        >
+          {sidebarOpen ? 'Hide details ›' : '‹ Details'}
+        </button>
       </header>
-      <main className="app__grid">
-        {state.status === 'loading' && (
-          <p className="placeholder">Loading worktrees…</p>
+      <div className={`app__body${sidebarOpen ? ' app__body--sidebar' : ''}`}>
+        <main className="app__grid">
+          {state.status === 'loading' && (
+            <p className="placeholder">Loading worktrees…</p>
+          )}
+          {state.status === 'error' && (
+            <p className="placeholder placeholder--error">
+              Error: {state.error}
+            </p>
+          )}
+          {state.status === 'ready' &&
+            state.worktrees.map((wt) => (
+              <AgentCell
+                key={wt.agent}
+                worktree={wt}
+                processState={processSnapshot.perAgent[wt.agent] ?? null}
+                note={notes[wt.agent] ?? null}
+                terminalEnv={terminalEnv}
+                focused={focusedAgent === wt.agent}
+                onFocus={() => setFocusedAgent(wt.agent)}
+                onSaveNote={(label) => saveNote(wt.agent, label)}
+              />
+            ))}
+        </main>
+        {sidebarOpen && (
+          <aside className="sidebar">
+            {focusedWorktree ? (
+              <AgentDetail
+                worktree={focusedWorktree}
+                processState={
+                  processSnapshot.perAgent[focusedWorktree.agent] ?? null
+                }
+                note={notes[focusedWorktree.agent] ?? null}
+              />
+            ) : (
+              <p className="placeholder">
+                Click a cell to see its detail here.
+              </p>
+            )}
+          </aside>
         )}
-        {state.status === 'error' && (
-          <p className="placeholder placeholder--error">Error: {state.error}</p>
-        )}
-        {state.status === 'ready' &&
-          state.worktrees.map((wt) => (
-            <AgentCell
-              key={wt.agent}
-              worktree={wt}
-              processState={processSnapshot.perAgent[wt.agent] ?? null}
-              note={notes[wt.agent] ?? null}
-              terminalEnv={terminalEnv}
-              focused={focusedAgent === wt.agent}
-              onFocus={() => setFocusedAgent(wt.agent)}
-              onSaveNote={(label) => saveNote(wt.agent, label)}
-            />
-          ))}
-      </main>
+      </div>
     </div>
   );
 }
@@ -557,19 +599,261 @@ function PortsInline({
   return (
     <span className="ports-inline">
       {buttons.map((b) => (
-        <a
+        <button
           key={b.label}
           className="port-mini"
-          href={`http://localhost:${b.port}`}
-          target="_blank"
-          rel="noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          title={`Open localhost:${b.port}`}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void window.ranch.app.openExternal(`http://localhost:${b.port}`);
+          }}
+          title={`Open http://localhost:${b.port} in your browser`}
         >
           {b.label}:{b.port}
-        </a>
+          <span className="port-mini__arrow">↗</span>
+        </button>
       ))}
     </span>
+  );
+}
+
+// ─── Sidebar AgentDetail ─────────────────────────────────────
+
+function AgentDetail({
+  worktree,
+  processState,
+  note,
+}: {
+  worktree: WorktreeBasics;
+  processState: CCProcessState | null;
+  note: AgentNote | null;
+}): JSX.Element {
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [git, setGit] = useState<WorktreeGitState | null>(null);
+
+  // Sidebar polls its own copies. We refetch on agent change so switching
+  // between cells gets fresh data immediately rather than after the next tick.
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const [s, g] = await Promise.all([
+          window.ranch.worktrees.session(worktree.agent),
+          window.ranch.worktrees.git(worktree.agent),
+        ]);
+        if (!cancelled) {
+          setSession(s);
+          setGit(g);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [worktree.agent]);
+
+  return (
+    <div className="detail">
+      <div className="detail__header">
+        <span className="detail__name">{worktree.agent}</span>
+        {note?.label && <p className="detail__label">{note.label}</p>}
+        <button
+          type="button"
+          className="detail__reveal"
+          onClick={() =>
+            void window.ranch.app.revealInFinder(worktree.worktreePath)
+          }
+          title="Reveal worktree in Finder"
+        >
+          Reveal in Finder
+        </button>
+      </div>
+
+      <DetailSection title="Status">
+        <DetailRow label="run state" value={session?.runState ?? '…'} />
+        <DetailRow
+          label="last activity"
+          value={relativeAge(session?.lastActivityAt)}
+        />
+        <DetailRow
+          label="claude PID(s)"
+          value={
+            processState && processState.claudeProcesses.length > 0
+              ? processState.claudeProcesses.map((p) => p.pid).join(', ')
+              : '—'
+          }
+        />
+        <DetailRow
+          label="tmux"
+          value={
+            processState?.tmux
+              ? `${processState.tmux.sessionName} (${processState.tmux.attachedClients} client${processState.tmux.attachedClients === 1 ? '' : 's'})`
+              : '—'
+          }
+        />
+      </DetailSection>
+
+      <DetailSection title="Branch">
+        {git?.status === 'ok' ? (
+          <>
+            <DetailRow label="branch" value={git.branch} mono />
+            <DetailRow label="dirty" value={git.dirty ? 'yes' : 'no'} />
+            <DetailRow
+              label="vs origin/develop"
+              value={`↑${git.ahead ?? 0}  ↓${git.behind ?? 0}`}
+              mono
+            />
+            {git.lastCommit && (
+              <DetailRow
+                label="last commit"
+                value={`${git.lastCommit.sha} · ${git.lastCommit.message} · ${git.lastCommit.age}`}
+              />
+            )}
+          </>
+        ) : (
+          <p className="detail__empty">no git repository</p>
+        )}
+      </DetailSection>
+
+      <DetailSection title="Ports">
+        <DetailRow
+          label="source"
+          value={
+            worktree.portsSource === 'ranch-config'
+              ? 'ranch config (canonical)'
+              : worktree.portsSource === 'env-agent'
+                ? '.env.agent (may drift)'
+                : 'unknown'
+          }
+        />
+        {worktree.ports.django !== undefined && (
+          <DetailRow
+            label="django"
+            value={String(worktree.ports.django)}
+            mono
+          />
+        )}
+        {worktree.ports.vite !== undefined && (
+          <DetailRow label="vite" value={String(worktree.ports.vite)} mono />
+        )}
+        {worktree.envAgentPath && (
+          <DetailRow label=".env.agent" value={worktree.envAgentPath} mono />
+        )}
+        {!worktree.envAgentMatches && worktree.envAgentName && (
+          <p className="detail__warn">
+            ⚠ .env.agent says <code>AGENT_NAME={worktree.envAgentName}</code>{' '}
+            but this worktree is registered as <code>{worktree.agent}</code>.
+            Run <code>make sync-env</code> from citemed_web on develop.
+          </p>
+        )}
+      </DetailSection>
+
+      {processState?.claudeRunning &&
+        processState.claudeProcesses.length > 1 && (
+          <DetailSection title="⚠ Multiple claude processes">
+            <p className="detail__warn">
+              {processState.claudeProcesses.length} claude processes detected
+              here — duplicate session is likely.
+            </p>
+            <ul className="detail__pids">
+              {processState.claudeProcesses.map((p) => (
+                <li key={p.pid}>
+                  <code>PID {p.pid}</code>
+                  {p.cwd && <span className="detail__path"> · {p.cwd}</span>}
+                </li>
+              ))}
+            </ul>
+          </DetailSection>
+        )}
+
+      {processState?.claudeRunning && !processState.tmux && (
+        <DetailSection title="⚠ Outside ranch">
+          <p className="detail__warn">
+            Claude is running in this worktree but no{' '}
+            <code>ranch-{worktree.agent}</code> tmux session exists. It was
+            likely started outside the console.
+          </p>
+        </DetailSection>
+      )}
+
+      <DetailSection title="Todos" count={session?.todos.length ?? 0}>
+        {session && session.todos.length > 0 ? (
+          <ul className="detail__todos">
+            {session.todos.map((t, i) => (
+              <li
+                key={i}
+                className={`detail__todo detail__todo--${t.status.replace('_', '-')}`}
+              >
+                <span className="detail__todo-icon">
+                  {t.status === 'completed'
+                    ? '✓'
+                    : t.status === 'in_progress'
+                      ? '◐'
+                      : '○'}
+                </span>
+                <span className="detail__todo-text">{t.content}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="detail__empty">no todos in this session</p>
+        )}
+      </DetailSection>
+
+      {session?.lastAssistantText && (
+        <DetailSection title="Latest assistant text">
+          <p className="detail__text">{session.lastAssistantText}</p>
+        </DetailSection>
+      )}
+    </div>
+  );
+}
+
+function DetailSection({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <section className="detail__section">
+      <h3 className="detail__section-title">
+        {title}
+        {count !== undefined && count > 0 && (
+          <span className="detail__count">{count}</span>
+        )}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}): JSX.Element {
+  return (
+    <div className="detail__row">
+      <span className="detail__row-label">{label}</span>
+      <span
+        className={`detail__row-value${mono ? ' detail__row-value--mono' : ''}`}
+      >
+        {value}
+      </span>
+    </div>
   );
 }
 

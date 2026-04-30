@@ -47,6 +47,7 @@ export const IPC_CHANNELS = {
   terminalExit: 'terminal:exit',
   appVersion: 'ranch:app:version',
   appRevealInFinder: 'ranch:app:revealInFinder',
+  appOpenExternal: 'ranch:app:openExternal',
 } as const;
 
 export function registerIpcHandlers(): void {
@@ -161,5 +162,14 @@ export function registerIpcHandlers(): void {
     // if it's a file, or showing the directory). Safer than openPath which
     // would try to "open" the directory in whatever the default handler is.
     shell.showItemInFolder(path);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.appOpenExternal, async (_event, url: unknown) => {
+    if (typeof url !== 'string' || !url) return;
+    // Allowlist: http(s) and the file:// scheme. Anything else is rejected
+    // — we don't want a stray IPC message launching a `file://` script or a
+    // custom-protocol handler we didn't authorize.
+    if (!/^(https?:|file:)\/\//.test(url)) return;
+    await shell.openExternal(url);
   });
 }

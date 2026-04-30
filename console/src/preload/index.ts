@@ -40,6 +40,7 @@ const IPC_CHANNELS = {
   terminalExit: 'terminal:exit',
   appVersion: 'ranch:app:version',
   appRevealInFinder: 'ranch:app:revealInFinder',
+  appOpenExternal: 'ranch:app:openExternal',
 } as const;
 
 /**
@@ -96,6 +97,8 @@ const api: RanchApi = {
     version: () => ipcRenderer.invoke(IPC_CHANNELS.appVersion),
     revealInFinder: (path) =>
       ipcRenderer.invoke(IPC_CHANNELS.appRevealInFinder, path),
+    openExternal: (url) =>
+      ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, url),
   },
 };
 
