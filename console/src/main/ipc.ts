@@ -17,6 +17,8 @@ import { app, ipcMain } from 'electron';
 import { loadRanchConfig } from './config.js';
 import { listWorktrees } from './worktrees.js';
 import { getActiveSession } from './transcript.js';
+import { getWorktreeGitState } from './git.js';
+import { snapshotProcessState } from './process.js';
 import {
   attachTerminal,
   detachTerminal,
@@ -29,6 +31,8 @@ export const IPC_CHANNELS = {
   configGet: 'ranch:config:get',
   worktreesList: 'ranch:worktrees:list',
   worktreesSession: 'ranch:worktrees:session',
+  worktreesGit: 'ranch:worktrees:git',
+  worktreesProcessSnapshot: 'ranch:worktrees:processSnapshot',
   terminalEnv: 'ranch:terminal:env',
   terminalAttach: 'ranch:terminal:attach',
   terminalWrite: 'ranch:terminal:write',
@@ -59,6 +63,23 @@ export function registerIpcHandlers(): void {
       return getActiveSession(match.worktree);
     },
   );
+
+  ipcMain.handle(IPC_CHANNELS.worktreesGit, async (_event, agent: unknown) => {
+    if (typeof agent !== 'string' || !agent) {
+      throw new Error('worktrees.git requires an agent name');
+    }
+    const config = await loadRanchConfig();
+    const match = config.agents.find((a) => a.name === agent);
+    if (!match) throw new Error(`Unknown agent: ${agent}`);
+    return getWorktreeGitState(match.worktree);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.worktreesProcessSnapshot, async () => {
+    const config = await loadRanchConfig();
+    const agents: Record<string, string> = {};
+    for (const a of config.agents) agents[a.name] = a.worktree;
+    return snapshotProcessState({ agents });
+  });
 
   ipcMain.handle(IPC_CHANNELS.terminalEnv, async () => getTerminalEnv());
 

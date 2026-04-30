@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import type {
+  CCProcessState,
   SessionState,
   TerminalEnv,
   TodoItem,
   WorktreeBasics,
+  WorktreeGitState,
 } from '../shared/types.js';
 import { Terminal } from './Terminal.js';
 
 const SESSION_POLL_MS = 4000;
+const PROCESS_POLL_MS = 5000;
+const GIT_POLL_MS = 8000;
 const WORKTREE_POLL_MS = 30_000;
 
 interface AppState {
@@ -32,6 +36,9 @@ export function App(): JSX.Element {
     null,
   );
   const [terminalEnv, setTerminalEnv] = useState<TerminalEnv | null>(null);
+  const [processSnapshot, setProcessSnapshot] = useState<
+    Record<string, CCProcessState>
+  >({});
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +47,26 @@ export function App(): JSX.Element {
     });
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  // Fleet-wide process snapshot (one ps + one tmux-list per tick, all agents).
+  // Cheaper than per-card polling and gives us cross-worktree consistency.
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const snap = await window.ranch.worktrees.processSnapshot();
+        if (!cancelled) setProcessSnapshot(snap);
+      } catch {
+        // tmux/ps errors are surfaced indirectly (empty snapshot)
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, PROCESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
     };
   }, []);
 
@@ -107,6 +134,7 @@ export function App(): JSX.Element {
             state={state}
             onOpenTerminal={openTerminal}
             terminalEnv={terminalEnv}
+            processSnapshot={processSnapshot}
           />
         </section>
         <section className="pane pane--terminal">
@@ -155,10 +183,12 @@ function Grid({
   state,
   onOpenTerminal,
   terminalEnv,
+  processSnapshot,
 }: {
   state: AppState;
   onOpenTerminal: (agent: string) => void;
   terminalEnv: TerminalEnv | null;
+  processSnapshot: Record<string, CCProcessState>;
 }): JSX.Element {
   if (state.status === 'loading') {
     return <p className="placeholder">Loading worktrees…</p>;
@@ -190,6 +220,7 @@ function Grid({
             worktree={wt}
             onOpenTerminal={onOpenTerminal}
             terminalEnv={terminalEnv}
+            processState={processSnapshot[wt.agent] ?? null}
           />
         ))}
       </div>
@@ -201,15 +232,18 @@ interface WorktreeCardProps {
   worktree: WorktreeBasics;
   onOpenTerminal: (agent: string) => void;
   terminalEnv: TerminalEnv | null;
+  processState: CCProcessState | null;
 }
 
 function WorktreeCard({
   worktree,
   onOpenTerminal,
   terminalEnv,
+  processState,
 }: WorktreeCardProps): JSX.Element {
   const [session, setSession] = useState<SessionState | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [git, setGit] = useState<WorktreeGitState | null>(null);
 
   // Per-card transcript polling: cheap (file mtime + parse tail) and the
   // freshness here is what makes the card actually useful.
@@ -238,19 +272,44 @@ function WorktreeCard({
     };
   }, [worktree.agent]);
 
+  // Per-card git state polling. Slower than transcript — branch + last
+  // commit only change when the operator does something.
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const next = await window.ranch.worktrees.git(worktree.agent);
+        if (!cancelled) setGit(next);
+      } catch {
+        // ignore — card just won't show git row
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, GIT_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [worktree.agent]);
+
   return (
     <article className="card">
       <header className="card__header">
         <span className="card__name">{worktree.agent}</span>
-        <SessionPill session={session} error={sessionError} />
+        <SessionPill
+          session={session}
+          processState={processState}
+          error={sessionError}
+        />
       </header>
       {worktree.description && (
         <p className="card__desc">{worktree.description}</p>
       )}
       <p className="card__path">{worktree.worktreePath}</p>
-      <BranchRow session={session} />
+      <GitRow git={git} session={session} />
       <TopicLine session={session} />
       <TodoSummary todos={session?.todos ?? []} />
+      <ProcessRow processState={processState} />
       <PortsRow ports={worktree.ports} source={worktree.portsSource} />
       <DriftWarnings worktree={worktree} />
       {!worktree.envAgentExists && (
@@ -278,33 +337,126 @@ function WorktreeCard({
 
 function SessionPill({
   session,
+  processState,
   error,
 }: {
   session: SessionState | null;
+  processState: CCProcessState | null;
   error: string | null;
 }): JSX.Element {
   if (error) return <span className="pill pill--error">err</span>;
+  // Process state is the strongest signal — claude is or isn't running now.
+  if (processState?.claudeRunning) {
+    return <span className="pill pill--running">claude running</span>;
+  }
   if (!session) return <span className="pill">…</span>;
   if (session.status === 'none') {
     return <span className="pill pill--idle">no session</span>;
   }
   const age = relativeAge(session.lastActivityAt);
-  return <span className="pill pill--active">active · {age}</span>;
+  return <span className="pill pill--active">last · {age}</span>;
 }
 
-function BranchRow({
+function GitRow({
+  git,
   session,
 }: {
+  git: WorktreeGitState | null;
   session: SessionState | null;
 }): JSX.Element | null {
-  const branch = session?.gitBranch;
-  if (!branch) return null;
-  const ticket = extractTicketId(branch);
+  // git observer is authoritative; transcript branch is fallback while
+  // git poll is in flight on first paint.
+  let branch: string | undefined;
+  if (git?.status === 'ok') branch = git.branch;
+  else if (session?.gitBranch) branch = session.gitBranch;
+
+  if (!branch && (!git || git.status !== 'ok')) return null;
+
+  const ticket = branch ? extractTicketId(branch) : null;
+  const dirty = git?.status === 'ok' && git.dirty;
+  const ahead = git?.status === 'ok' ? (git.ahead ?? 0) : 0;
+  const behind = git?.status === 'ok' ? (git.behind ?? 0) : 0;
+  const lastCommit = git?.status === 'ok' ? git.lastCommit : undefined;
+
   return (
-    <p className="card__branch">
-      <span className="card__branch-name">{branch}</span>
-      {ticket && <span className="card__ticket">{ticket}</span>}
-    </p>
+    <div className="card__git">
+      <div className="card__git-line">
+        {branch && <span className="card__branch-name">{branch}</span>}
+        {ticket && <span className="card__ticket">{ticket}</span>}
+        {dirty && (
+          <span
+            className="card__git-dirty"
+            title="Uncommitted changes in working tree"
+          >
+            ●
+          </span>
+        )}
+        {(ahead > 0 || behind > 0) && (
+          <span
+            className="card__git-ahead-behind"
+            title={`${ahead} ahead, ${behind} behind origin/develop`}
+          >
+            {ahead > 0 && `↑${ahead}`}
+            {behind > 0 && `↓${behind}`}
+          </span>
+        )}
+      </div>
+      {lastCommit && (
+        <div
+          className="card__git-commit"
+          title={`${lastCommit.sha} · ${lastCommit.age}`}
+        >
+          <code>{lastCommit.sha}</code> {truncate(lastCommit.message, 60)}{' '}
+          <span className="card__git-age">· {lastCommit.age}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProcessRow({
+  processState,
+}: {
+  processState: CCProcessState | null;
+}): JSX.Element | null {
+  if (!processState) return null;
+  const tmuxBadge = processState.tmux ? (
+    <span
+      className="proc-badge proc-badge--ok"
+      title={
+        processState.tmux.attachedClients > 0
+          ? `tmux session with ${processState.tmux.attachedClients} client(s)`
+          : 'tmux session detached but alive'
+      }
+    >
+      tmux ✓ {processState.tmux.attachedClients > 0 ? '· attached' : ''}
+    </span>
+  ) : (
+    <span className="proc-badge proc-badge--off" title="No ranch- tmux session">
+      tmux —
+    </span>
+  );
+  const claudePids = processState.claudeProcesses.map((p) => p.pid).join(', ');
+  const claudeBadge = processState.claudeRunning ? (
+    <span
+      className="proc-badge proc-badge--ok"
+      title={`claude PID(s): ${claudePids}`}
+    >
+      claude · {processState.claudeProcesses.length}
+    </span>
+  ) : (
+    <span
+      className="proc-badge proc-badge--off"
+      title="No claude process in this worktree"
+    >
+      claude —
+    </span>
+  );
+  return (
+    <div className="card__procs">
+      {tmuxBadge}
+      {claudeBadge}
+    </div>
   );
 }
 

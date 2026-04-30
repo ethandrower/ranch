@@ -69,6 +69,47 @@ export interface WorktreeBasics {
   envAgentPorts: WorktreePorts;
 }
 
+// ─── Git state (MVP-2) ──────────────────────────────────────────────────
+
+export interface GitLastCommit {
+  sha: string;
+  message: string;
+  age: string;
+}
+
+export type WorktreeGitState =
+  | { status: 'no-git' }
+  | {
+      status: 'ok';
+      branch: string;
+      dirty: boolean;
+      ahead?: number;
+      behind?: number;
+      lastCommit?: GitLastCommit;
+    };
+
+// ─── Process state (MVP-4) ──────────────────────────────────────────────
+
+export interface TmuxSessionState {
+  sessionName: string;
+  exists: boolean;
+  attachedClients: number;
+  createdAt?: string;
+}
+
+export interface ClaudeProcess {
+  pid: number;
+  ppid: number;
+  command: string;
+  cwd?: string;
+}
+
+export interface CCProcessState {
+  tmux: TmuxSessionState | null;
+  claudeRunning: boolean;
+  claudeProcesses: ClaudeProcess[];
+}
+
 // ─── CC session state (MVP-3: from ~/.claude/projects/<encoded>/*.jsonl) ─
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed';
@@ -132,6 +173,9 @@ export interface RanchApi {
   worktrees: {
     list: () => Promise<WorktreeBasics[]>;
     session: (agent: string) => Promise<SessionState>;
+    git: (agent: string) => Promise<WorktreeGitState>;
+    /** Fleet snapshot — one ps + one tmux-list per call, all agents. */
+    processSnapshot: () => Promise<Record<string, CCProcessState>>;
   };
   terminal: {
     env: () => Promise<TerminalEnv>;
