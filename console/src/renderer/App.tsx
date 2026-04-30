@@ -1320,7 +1320,11 @@ function AgentCell({
       />
       <div className="cell__terminal">
         {terminalEnv && terminalEnv.tmuxAvailable ? (
-          <Terminal agent={worktree.agent} generation={generation} />
+          <Terminal
+            agent={worktree.agent}
+            generation={generation}
+            onReconnect={onBumpGeneration}
+          />
         ) : (
           <p className="placeholder placeholder--center">
             tmux not installed — terminals unavailable

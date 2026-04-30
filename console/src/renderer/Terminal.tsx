@@ -23,14 +23,26 @@ interface TerminalProps {
   agent: string;
   /** Increment this to force a fresh attach (e.g. after detach). */
   generation: number;
+  /**
+   * Called when the user clicks the Reconnect overlay button. The parent
+   * should bump `generation` in response — that triggers a remount which
+   * re-runs attach (which spawns a fresh tmux session via -A semantics
+   * if none exists, or attaches to an existing one).
+   */
+  onReconnect?: () => void;
 }
 
 type Status =
   | { kind: 'connecting' }
   | { kind: 'connected'; terminalId: string }
+  | { kind: 'exited'; exitCode: number; signal: number | null }
   | { kind: 'error'; reason: string };
 
-export function Terminal({ agent, generation }: TerminalProps): JSX.Element {
+export function Terminal({
+  agent,
+  generation,
+  onReconnect,
+}: TerminalProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: 'connecting' });
 
@@ -88,6 +100,13 @@ export function Terminal({ agent, generation }: TerminalProps): JSX.Element {
       xterm.writeln(
         `\r\n\x1b[33m[ranch] tmux client detached (exit=${evt.exitCode}${sigPart})\x1b[0m`,
       );
+      // Surface a Reconnect overlay so the operator has a clear path back
+      // — without this, killing the session leaves the cell stuck.
+      setStatus({
+        kind: 'exited',
+        exitCode: evt.exitCode,
+        signal: evt.signal,
+      });
     });
 
     // 3. Forward keystrokes from xterm into the pty.
@@ -163,6 +182,31 @@ export function Terminal({ agent, generation }: TerminalProps): JSX.Element {
       {status.kind === 'error' && (
         <div className="terminal__overlay terminal__overlay--error">
           {status.reason}
+        </div>
+      )}
+      {status.kind === 'exited' && (
+        <div className="terminal__overlay terminal__overlay--exited">
+          <div className="terminal__exit-card">
+            <p className="terminal__exit-msg">
+              Session ended
+              {status.signal !== null
+                ? ` (signal ${status.signal})`
+                : ` (exit ${status.exitCode})`}
+            </p>
+            {onReconnect ? (
+              <button
+                type="button"
+                className="terminal__reconnect"
+                onClick={onReconnect}
+              >
+                Reconnect
+              </button>
+            ) : (
+              <p className="terminal__exit-hint">
+                Bump generation to reattach.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
