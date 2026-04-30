@@ -9,6 +9,8 @@ import {
 import type {
   AgentNote,
   CCProcessState,
+  DockerContainer,
+  DockerStackSnapshot,
   ProcessSnapshot,
   RunDetail,
   RunRecord,
@@ -26,9 +28,16 @@ const EMPTY_SNAPSHOT: ProcessSnapshot = {
   totalClaudes: 0,
 };
 
+const EMPTY_DOCKER: DockerStackSnapshot = {
+  available: false,
+  perAgent: {},
+  shared: [],
+};
+
 const SESSION_POLL_MS = 4000;
 const PROCESS_POLL_MS = 5000;
 const GIT_POLL_MS = 8000;
+const DOCKER_POLL_MS = 7000;
 const WORKTREE_POLL_MS = 30_000;
 const NOTES_POLL_MS = 15_000;
 
@@ -47,6 +56,8 @@ export function App(): JSX.Element {
   const [terminalEnv, setTerminalEnv] = useState<TerminalEnv | null>(null);
   const [processSnapshot, setProcessSnapshot] =
     useState<ProcessSnapshot>(EMPTY_SNAPSHOT);
+  const [dockerSnapshot, setDockerSnapshot] =
+    useState<DockerStackSnapshot>(EMPTY_DOCKER);
   const [notes, setNotes] = useState<Record<string, AgentNote>>({});
   const [focusedAgent, setFocusedAgent] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
@@ -121,6 +132,25 @@ export function App(): JSX.Element {
     }
     void refresh();
     const handle = setInterval(refresh, PROCESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, []);
+
+  // ─── docker snapshot (fleet-wide) ─────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      try {
+        const snap = await window.ranch.docker.snapshot();
+        if (!cancelled) setDockerSnapshot(snap);
+      } catch {
+        // docker not running / not installed — empty state surfaces it
+      }
+    }
+    void refresh();
+    const handle = setInterval(refresh, DOCKER_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(handle);
@@ -218,6 +248,7 @@ export function App(): JSX.Element {
                   key={wt.agent}
                   worktree={wt}
                   processState={processSnapshot.perAgent[wt.agent] ?? null}
+                  dockerContainers={dockerSnapshot.perAgent[wt.agent] ?? []}
                   note={notes[wt.agent] ?? null}
                   terminalEnv={terminalEnv}
                   focused={focusedAgent === wt.agent}
@@ -236,6 +267,10 @@ export function App(): JSX.Element {
                   processState={
                     processSnapshot.perAgent[focusedWorktree.agent] ?? null
                   }
+                  dockerContainers={
+                    dockerSnapshot.perAgent[focusedWorktree.agent] ?? []
+                  }
+                  dockerAvailable={dockerSnapshot.available}
                   note={notes[focusedWorktree.agent] ?? null}
                 />
               ) : (
@@ -923,6 +958,7 @@ function orphanTooltip(snap: ProcessSnapshot): string {
 interface AgentCellProps {
   worktree: WorktreeBasics;
   processState: CCProcessState | null;
+  dockerContainers: DockerContainer[];
   note: AgentNote | null;
   terminalEnv: TerminalEnv | null;
   focused: boolean;
@@ -935,6 +971,7 @@ interface AgentCellProps {
 function AgentCell({
   worktree,
   processState,
+  dockerContainers,
   note,
   terminalEnv,
   focused,
@@ -1057,6 +1094,7 @@ function AgentCell({
         worktree={worktree}
         session={session}
         processState={processState}
+        dockerContainers={dockerContainers}
         git={git}
         note={note}
         onSaveNote={onSaveNote}
@@ -1086,6 +1124,7 @@ function CellHeader({
   worktree,
   session,
   processState,
+  dockerContainers,
   git,
   note,
   onSaveNote,
@@ -1096,6 +1135,7 @@ function CellHeader({
   worktree: WorktreeBasics;
   session: SessionState | null;
   processState: CCProcessState | null;
+  dockerContainers: DockerContainer[];
   git: WorktreeGitState | null;
   note: AgentNote | null;
   onSaveNote: (label: string) => void;
@@ -1109,6 +1149,7 @@ function CellHeader({
         <span className="cell__name">{worktree.agent}</span>
         <SessionPill session={session} processState={processState} />
         <GitInline git={git} session={session} />
+        <DockerBadge containers={dockerContainers} />
         <PortsInline ports={worktree.ports} />
         <SessionMenu
           onSendCtrlC={onSendCtrlC}
@@ -1419,6 +1460,28 @@ function GitInline({
   );
 }
 
+function DockerBadge({
+  containers,
+}: {
+  containers: DockerContainer[];
+}): JSX.Element | null {
+  if (containers.length === 0) return null;
+  const running = containers.filter((c) => c.state === 'running').length;
+  const total = containers.length;
+  const allUp = running === total;
+  const anyUp = running > 0;
+  const cls = allUp
+    ? 'docker-badge docker-badge--up'
+    : anyUp
+      ? 'docker-badge docker-badge--partial'
+      : 'docker-badge docker-badge--down';
+  return (
+    <span className={cls} title={`${running}/${total} containers running`}>
+      🐳 {running}/{total}
+    </span>
+  );
+}
+
 function PortsInline({
   ports,
 }: {
@@ -1455,14 +1518,20 @@ function PortsInline({
 function AgentDetail({
   worktree,
   processState,
+  dockerContainers,
+  dockerAvailable,
   note,
 }: {
   worktree: WorktreeBasics;
   processState: CCProcessState | null;
+  dockerContainers: DockerContainer[];
+  dockerAvailable: boolean;
   note: AgentNote | null;
 }): JSX.Element {
   const [session, setSession] = useState<SessionState | null>(null);
   const [git, setGit] = useState<WorktreeGitState | null>(null);
+  const [dockerBusy, setDockerBusy] = useState<string | null>(null);
+  const [dockerMsg, setDockerMsg] = useState<string | null>(null);
 
   // Sidebar polls its own copies. We refetch on agent change so switching
   // between cells gets fresh data immediately rather than after the next tick.
@@ -1506,6 +1575,16 @@ function AgentDetail({
           Reveal in Finder
         </button>
       </div>
+
+      <DockerSection
+        agent={worktree.agent}
+        containers={dockerContainers}
+        available={dockerAvailable}
+        busy={dockerBusy}
+        msg={dockerMsg}
+        setBusy={setDockerBusy}
+        setMsg={setDockerMsg}
+      />
 
       <DetailSection title="Status">
         <DetailRow label="run state" value={session?.runState ?? '…'} />
@@ -1645,6 +1724,152 @@ function AgentDetail({
       )}
     </div>
   );
+}
+
+function DockerSection({
+  agent,
+  containers,
+  available,
+  busy,
+  msg,
+  setBusy,
+  setMsg,
+}: {
+  agent: string;
+  containers: DockerContainer[];
+  available: boolean;
+  busy: string | null;
+  msg: string | null;
+  setBusy: (v: string | null) => void;
+  setMsg: (v: string | null) => void;
+}): JSX.Element {
+  function flash(text: string): void {
+    setMsg(text);
+    setTimeout(() => setMsg(null), 4000);
+  }
+
+  async function withBusy(
+    label: string,
+    fn: () => Promise<{ ok: boolean; stderr: string; stdout: string }>,
+  ): Promise<void> {
+    if (busy) return;
+    setBusy(label);
+    try {
+      const result = await fn();
+      if (result.ok) {
+        flash(`${label} succeeded`);
+      } else {
+        const tail = (result.stderr || result.stdout || '').trim().slice(-200);
+        flash(`${label} failed: ${tail || '(no output)'}`);
+      }
+    } catch (err) {
+      flash(
+        `${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleUp(): Promise<void> {
+    await withBusy('Up', () => window.ranch.docker.up(agent));
+  }
+  async function handleDown(): Promise<void> {
+    if (
+      !window.confirm(
+        `Bring down docker stack for ${agent}?\n\nRunning containers will be stopped and removed.`,
+      )
+    )
+      return;
+    await withBusy('Down', () => window.ranch.docker.down(agent));
+  }
+  async function handleRestart(): Promise<void> {
+    await withBusy('Restart', () => window.ranch.docker.restart(agent));
+  }
+
+  const running = containers.filter((c) => c.state === 'running').length;
+  const total = containers.length;
+
+  return (
+    <DetailSection title={`Docker · ${running}/${total}`}>
+      {!available && (
+        <p className="detail__warn">
+          Docker engine not reachable. Is Docker Desktop running?
+        </p>
+      )}
+      {available && total === 0 && (
+        <p className="detail__empty">
+          No <code>citemed_{agent}</code> containers. Click <strong>Up</strong>{' '}
+          to bring the stack up.
+        </p>
+      )}
+      {total > 0 && (
+        <ul className="docker-services">
+          {containers.map((c) => (
+            <li
+              key={c.id}
+              className={`docker-service docker-service--${c.state}`}
+            >
+              <span className="docker-service__name">
+                {c.service ?? c.name}
+              </span>
+              <span
+                className={`docker-service__state docker-service__state--${c.state}`}
+                title={c.status}
+              >
+                {c.state}
+              </span>
+              {c.ports && (
+                <span className="docker-service__ports" title={c.ports}>
+                  {summarizePortString(c.ports)}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="docker-actions">
+        <button
+          type="button"
+          className="run-action run-action--approve"
+          onClick={handleUp}
+          disabled={!available || busy !== null}
+          title="docker compose up -d (uses .env.agent + docker-compose.agent.yml)"
+        >
+          {busy === 'Up' ? '…' : 'Up'}
+        </button>
+        <button
+          type="button"
+          className="run-action"
+          onClick={handleRestart}
+          disabled={!available || busy !== null || total === 0}
+          title="docker compose restart"
+        >
+          {busy === 'Restart' ? '…' : 'Restart'}
+        </button>
+        <button
+          type="button"
+          className="run-action run-action--stop"
+          onClick={handleDown}
+          disabled={!available || busy !== null || total === 0}
+          title="docker compose down (stops and removes containers)"
+        >
+          {busy === 'Down' ? '…' : 'Down'}
+        </button>
+      </div>
+      {msg && <p className="run-modal__action-msg">{msg}</p>}
+    </DetailSection>
+  );
+}
+
+/**
+ * Boil down docker's `Ports` column to just the host-side bindings —
+ * "0.0.0.0:8003->8000/tcp" → "8003".
+ */
+function summarizePortString(raw: string): string {
+  const matches = raw.matchAll(/0\.0\.0\.0:(\d+)->/g);
+  const ports = Array.from(matches).map((m) => m[1]!);
+  return ports.length > 0 ? ports.join(', ') : raw.slice(0, 30);
 }
 
 function DetailSection({
