@@ -192,15 +192,14 @@ export function registerIpcHandlers(): void {
     if (typeof o.agent !== 'string' || !o.agent.trim()) {
       throw new Error('runs.dispatch needs agent');
     }
-    if (typeof o.ticket !== 'string' || !o.ticket.trim()) {
-      throw new Error('runs.dispatch needs ticket');
-    }
     if (typeof o.brief !== 'string' || !o.brief.trim()) {
       throw new Error('runs.dispatch needs brief');
     }
+    const ticket =
+      typeof o.ticket === 'string' && o.ticket.trim() ? o.ticket : undefined;
     return dispatchRun({
       agent: o.agent,
-      ticket: o.ticket,
+      ...(ticket ? { ticket } : {}),
       brief: o.brief,
       free: o.free === true,
       autoApprove: o.autoApprove === true,

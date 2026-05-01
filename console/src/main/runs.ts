@@ -94,7 +94,8 @@ export async function stopRun(id: number): Promise<void> {
 
 export interface DispatchOptions {
   agent: string;
-  ticket: string;
+  /** Optional — pass empty/undefined for ad-hoc runs without a ticket. */
+  ticket?: string;
   brief: string;
   free?: boolean;
   autoApprove?: boolean;
@@ -119,20 +120,16 @@ function extractRunId(output: string): number | undefined {
 export async function dispatchRun(
   opts: DispatchOptions,
 ): Promise<DispatchResult> {
-  if (!opts.agent || !opts.ticket || !opts.brief.trim()) {
+  if (!opts.agent || !opts.brief.trim()) {
     return {
       ok: false,
-      output: 'agent, ticket, and brief are all required',
+      output: 'agent and brief are required (ticket is optional)',
     };
   }
-  const args = [
-    'dispatch',
-    opts.agent,
-    '--ticket',
-    opts.ticket,
-    '--brief',
-    opts.brief,
-  ];
+  const args = ['dispatch', opts.agent, '--brief', opts.brief];
+  if (opts.ticket && opts.ticket.trim()) {
+    args.push('--ticket', opts.ticket.trim());
+  }
   if (opts.free) args.push('--free');
   if (opts.autoApprove) args.push('--auto-approve');
 

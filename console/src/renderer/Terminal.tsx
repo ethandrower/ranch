@@ -51,6 +51,12 @@ export function Terminal({
     const container = containerRef.current;
     if (!container) return;
 
+    // Reset status on every (re)mount. Without this the Reconnect path
+    // is broken: bumping generation remounts the effect but React keeps
+    // the old `status` state, so the 'exited' overlay sticks even after
+    // the new pty attaches.
+    setStatus({ kind: 'connecting' });
+
     // 1. xterm instance
     const xterm = new XTerm({
       fontFamily: 'SF Mono, Menlo, Consolas, monospace',

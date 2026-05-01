@@ -303,7 +303,8 @@ export interface RunDetail extends RunRecord {
 
 export interface DispatchOptions {
   agent: string;
-  ticket: string;
+  /** Optional — pass empty/undefined for ad-hoc runs without a ticket. */
+  ticket?: string;
   brief: string;
   free?: boolean;
   autoApprove?: boolean;
