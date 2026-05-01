@@ -56,6 +56,7 @@ const IPC_CHANNELS = {
   dockerUp: 'ranch:docker:up',
   dockerDown: 'ranch:docker:down',
   dockerRestart: 'ranch:docker:restart',
+  dockerReset: 'ranch:docker:reset',
   dockerLogs: 'ranch:docker:logs',
 } as const;
 
@@ -139,6 +140,7 @@ const api: RanchApi = {
     up: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerUp, agent),
     down: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerDown, agent),
     restart: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerRestart, agent),
+    reset: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerReset, agent),
     logs: (agent, tail) =>
       ipcRenderer.invoke(IPC_CHANNELS.dockerLogs, agent, tail),
   },

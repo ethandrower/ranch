@@ -426,6 +426,8 @@ export interface RanchApi {
     up: (agent: string) => Promise<ComposeRunResult>;
     down: (agent: string) => Promise<ComposeRunResult>;
     restart: (agent: string) => Promise<ComposeRunResult>;
+    /** Down with -v (wipes volumes) then Up — clean-slate recreate. */
+    reset: (agent: string) => Promise<ComposeRunResult>;
     logs: (agent: string, tail?: number) => Promise<ComposeRunResult>;
   };
 }

@@ -1407,6 +1407,16 @@ body,
   border-color: var(--red);
 }
 
+.run-action--reset {
+  background: rgba(246, 193, 119, 0.1);
+  color: var(--yellow);
+  border-color: rgba(246, 193, 119, 0.3);
+}
+.run-action--reset:hover:not(:disabled) {
+  background: rgba(246, 193, 119, 0.18);
+  border-color: var(--yellow);
+}
+
 /* ─── Docker badge (cell header) ──────────────────── */
 
 .docker-badge {

@@ -2007,6 +2007,20 @@ function DockerSection({
   async function handleRestart(): Promise<void> {
     await withBusy('Restart', () => window.ranch.docker.restart(agent));
   }
+  async function handleReset(): Promise<void> {
+    if (
+      !window.confirm(
+        `Reset (clean-slate recreate) docker stack for ${agent}?\n\n` +
+          'This is destructive:\n' +
+          '  • all containers stopped and removed\n' +
+          '  • named volumes WIPED — Postgres data, Redis state, etc.\n' +
+          '  • stack recreated empty (you will need to re-run migrations / seed)\n\n' +
+          'Use this when the stack is wedged and a clean restart is what you actually want.',
+      )
+    )
+      return;
+    await withBusy('Reset', () => window.ranch.docker.reset(agent));
+  }
 
   const running = containers.filter((c) => c.state === 'running').length;
   const total = containers.length;
@@ -2076,6 +2090,15 @@ function DockerSection({
           title="docker compose down (stops and removes containers)"
         >
           {busy === 'Down' ? '…' : 'Down'}
+        </button>
+        <button
+          type="button"
+          className="run-action run-action--reset"
+          onClick={handleReset}
+          disabled={!available || busy !== null}
+          title="down -v + up — wipes volumes (destroys Postgres/Redis data) and recreates fresh"
+        >
+          {busy === 'Reset' ? '…' : 'Reset (wipe)'}
         </button>
       </div>
       {msg && <p className="run-modal__action-msg">{msg}</p>}
