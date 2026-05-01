@@ -642,16 +642,17 @@ function DispatchModal({
   async function submit(e: FormEvent): Promise<void> {
     e.preventDefault();
     if (busy) return;
-    if (!agent || !ticket.trim() || !brief.trim()) {
-      setError('agent, ticket, and brief are all required');
+    if (!agent || !brief.trim()) {
+      setError('agent and brief are required (ticket is optional)');
       return;
     }
     setBusy(true);
     setError(null);
     try {
+      const trimmedTicket = ticket.trim();
       const result = await window.ranch.runs.dispatch({
         agent,
-        ticket: ticket.trim(),
+        ...(trimmedTicket ? { ticket: trimmedTicket } : {}),
         brief: brief.trim(),
         free,
         autoApprove,
@@ -709,12 +710,12 @@ function DispatchModal({
           </label>
 
           <label className="dispatch-form__field">
-            <span className="dispatch-form__label">Ticket</span>
+            <span className="dispatch-form__label">Ticket (optional)</span>
             <input
               type="text"
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
-              placeholder="ECD-1234"
+              placeholder="ECD-1234 — leave blank for ad-hoc"
               disabled={busy}
               className="dispatch-form__input"
               autoFocus
@@ -1320,7 +1321,11 @@ function AgentCell({
       />
       <div className="cell__terminal">
         {terminalEnv && terminalEnv.tmuxAvailable ? (
-          <Terminal agent={worktree.agent} generation={generation} />
+          <Terminal
+            agent={worktree.agent}
+            generation={generation}
+            onReconnect={onBumpGeneration}
+          />
         ) : (
           <p className="placeholder placeholder--center">
             tmux not installed — terminals unavailable

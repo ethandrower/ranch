@@ -86,10 +86,11 @@ Your instructions are in the user message. Do exactly what's asked — no assume
 """
 
 
-def initial_user_prompt(ticket: str, brief: str, free: bool = False) -> str:
+def initial_user_prompt(ticket: str | None, brief: str, free: bool = False) -> str:
+    prefix = f"Ticket: {ticket}\n\n" if ticket else ""
     if free:
-        return f"Ticket: {ticket}\n\n{brief}"
-    return f"Ticket: {ticket}\n\n{brief}\n\nBegin with the PLAN step."
+        return f"{prefix}{brief}"
+    return f"{prefix}{brief}\n\nBegin with the PLAN step."
 
 
 SYSTEM_PROMPT_PR_REVIEW = """\

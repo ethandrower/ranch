@@ -40,7 +40,7 @@ def _detect_branch(cwd: Path) -> str | None:
 
 
 class Orchestrator:
-    def __init__(self, agent: str, cwd: Path, ticket: str, brief: str, free: bool = False, auto_approve: bool = False):
+    def __init__(self, agent: str, cwd: Path, ticket: str | None, brief: str, free: bool = False, auto_approve: bool = False):
         self.agent = agent
         self.cwd = cwd
         self.ticket = ticket
@@ -113,7 +113,7 @@ class Orchestrator:
                 run = db.query(Run).filter_by(id=self.run_id).one()
                 run.state = "planning"
 
-        console.print(f"[bold cyan]Ranch run #{self.run_id} — {self.agent} / {self.ticket}[/bold cyan]")
+        console.print(f"[bold cyan]Ranch run #{self.run_id} — {self.agent} / {self.ticket or 'ad-hoc'}[/bold cyan]")
         console.print("[dim]Commands: !note <text>  !approve  !reject <reason>  !stop[/dim]")
         console.print()
 

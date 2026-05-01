@@ -102,6 +102,50 @@ function projectMatchesAgent(project: string, agent: string): boolean {
   return project === `citemed_${agent}` || project === agent;
 }
 
+/**
+ * Find the actual docker compose project name in use for an agent's stack.
+ * Returns the canonical `citemed_<agent>` if both variants are present,
+ * the bare `<agent>` if only that exists, or null if no stack runs at all.
+ *
+ * Used by the lifecycle ops (down / restart / logs) — the user has at
+ * least one stack started without the `citemed_` prefix, and a hardcoded
+ * `-p citemed_<agent>` would no-op against it.
+ */
+async function findActiveProjectForAgent(
+  agent: string,
+): Promise<string | null> {
+  const dockerPath = await findDocker();
+  if (!dockerPath) return null;
+  const seen = new Set<string>();
+  try {
+    const { stdout } = await execFile(
+      dockerPath,
+      ['ps', '-a', '--format', 'json'],
+      { timeout: 5000 },
+    );
+    for (const line of stdout.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const obj = JSON.parse(trimmed) as RawPsRow;
+        const labels = parseLabels(obj.Labels);
+        const project = labels['com.docker.compose.project'];
+        if (project && projectMatchesAgent(project, agent)) {
+          seen.add(project);
+        }
+      } catch {
+        /* skip */
+      }
+    }
+  } catch {
+    return null;
+  }
+  // Prefer canonical when both exist.
+  if (seen.has(`citemed_${agent}`)) return `citemed_${agent}`;
+  if (seen.has(agent)) return agent;
+  return null;
+}
+
 function rowToContainer(row: RawPsRow): DockerContainer | null {
   const labels = parseLabels(row.Labels);
   const project = labels['com.docker.compose.project'];
@@ -209,12 +253,13 @@ async function composeRun(
   worktreePath: string,
   args: string[],
   needsFiles: boolean,
+  projectOverride?: string,
 ): Promise<ComposeRunResult> {
   const dockerPath = await findDocker();
   if (!dockerPath) {
     return { ok: false, stdout: '', stderr: 'docker not installed' };
   }
-  const project = `citemed_${agent}`;
+  const project = projectOverride ?? `citemed_${agent}`;
   const composeArgs: string[] = ['compose'];
 
   if (needsFiles) {
@@ -259,24 +304,49 @@ export async function dockerStackUp(
   agent: string,
   worktreePath: string,
 ): Promise<ComposeRunResult> {
-  return composeRun(agent, worktreePath, ['up', '-d'], true);
+  // For up: prefer existing project name if there's already a stack
+  // running for this agent. Avoids creating a duplicate (e.g. canonical
+  // `citemed_max` alongside an existing bare `max` stack).
+  const existing = await findActiveProjectForAgent(agent);
+  return composeRun(
+    agent,
+    worktreePath,
+    ['up', '-d'],
+    true,
+    existing ?? undefined,
+  );
 }
 
 export async function dockerStackDown(
   agent: string,
   worktreePath: string,
 ): Promise<ComposeRunResult> {
-  // `down` doesn't need the file list — project name is sufficient.
-  return composeRun(agent, worktreePath, ['down'], false);
+  // Detect the actual project so we don't issue a no-op `down` against
+  // the wrong project name.
+  const existing = await findActiveProjectForAgent(agent);
+  if (!existing) {
+    return {
+      ok: true,
+      stdout: 'no active stack to bring down',
+      stderr: '',
+    };
+  }
+  return composeRun(agent, worktreePath, ['down'], false, existing);
 }
 
 export async function dockerStackRestart(
   agent: string,
   worktreePath: string,
 ): Promise<ComposeRunResult> {
-  // restart on its own restarts the existing services without
-  // re-resolving the compose files. Fast and surgical.
-  return composeRun(agent, worktreePath, ['restart'], false);
+  const existing = await findActiveProjectForAgent(agent);
+  if (!existing) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: 'no active stack to restart — bring it Up first',
+    };
+  }
+  return composeRun(agent, worktreePath, ['restart'], false, existing);
 }
 
 export async function dockerStackLogs(
@@ -284,10 +354,12 @@ export async function dockerStackLogs(
   worktreePath: string,
   tail = 200,
 ): Promise<ComposeRunResult> {
+  const existing = await findActiveProjectForAgent(agent);
   return composeRun(
     agent,
     worktreePath,
     ['logs', `--tail=${tail}`, '--no-color'],
     false,
+    existing ?? undefined,
   );
 }

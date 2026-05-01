@@ -566,7 +566,7 @@ def context(tags, out):
 
 @cli.command("run")
 @click.argument("agent")
-@click.option("--ticket", required=True, help="Ticket ID (e.g. ECD-123)")
+@click.option("--ticket", required=False, default=None, help="Ticket ID (e.g. ECD-123); optional for ad-hoc runs")
 @click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
 @click.option("--free", is_flag=True, default=False, help="Skip the plan→push workflow — brief is the full instruction")
 @click.option("--auto-approve", is_flag=True, default=False, help="Auto-approve every checkpoint — for unattended evaluation runs")
@@ -604,7 +604,7 @@ def run_cmd(agent, ticket, brief, free, auto_approve):
 
 @cli.command("dispatch")
 @click.argument("agent")
-@click.option("--ticket", required=True, help="Ticket ID (e.g. ECD-123)")
+@click.option("--ticket", required=False, default=None, help="Ticket ID (e.g. ECD-123); optional for ad-hoc runs")
 @click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
 @click.option("--free", is_flag=True, default=False, help="Skip the plan→push workflow")
 @click.option("--auto-approve", is_flag=True, default=False, help="Auto-approve every checkpoint")
@@ -671,7 +671,7 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
             {"pid": proc.pid, "log_path": str(log_path)}
         )
 
-    console.print(f"[green]✓[/green] Dispatched run [bold]#{run_id}[/bold] ({agent} / {ticket})")
+    console.print(f"[green]✓[/green] Dispatched run [bold]#{run_id}[/bold] ({agent} / {ticket or 'ad-hoc'})")
     console.print(f"  PID:  {proc.pid}")
     console.print(f"  Log:  {log_path}")
     console.print(f"  Approve with: [cyan]ranch approve {run_id}[/cyan]")
