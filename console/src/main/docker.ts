@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type {
+  AgentDockerConfig,
   DockerContainer,
   DockerEnv,
   DockerStackSnapshot,
@@ -49,6 +50,39 @@ async function findDocker(): Promise<string | null> {
     cachedDockerPath = null;
     return null;
   }
+}
+
+/**
+ * Introspect what compose files + project name we'd actually use for
+ * an agent. Surfaced in the sidebar so the operator sees exactly what
+ * docker compose calls are being made — and notices if a path is missing.
+ */
+export interface ResolvedAgentDocker {
+  projectName: string;
+  composeFiles: string[];
+  envFile: string | null;
+  /** True if at least one configured compose file is missing on disk. */
+  missingFiles: string[];
+}
+
+export function resolveAgentDocker(
+  agent: string,
+  worktreePath: string,
+  dockerConfig?: AgentDockerConfig,
+): ResolvedAgentDocker {
+  const projectName = dockerConfig?.projectName ?? `citemed_${agent}`;
+  const wanted = dockerConfig?.composeFiles ?? DEFAULT_COMPOSE_FILES;
+  const composeFiles: string[] = [];
+  const missingFiles: string[] = [];
+  for (const name of wanted) {
+    const p = join(worktreePath, name);
+    if (existsSync(p)) composeFiles.push(p);
+    else missingFiles.push(p);
+  }
+  const envFileName = dockerConfig?.envFile ?? DEFAULT_ENV_FILE;
+  const envPath = join(worktreePath, envFileName);
+  const envFile = existsSync(envPath) ? envPath : null;
+  return { projectName, composeFiles, envFile, missingFiles };
 }
 
 export async function getDockerEnv(): Promise<DockerEnv> {
@@ -226,20 +260,42 @@ export async function snapshotDockerState(
 
 // ─── Lifecycle ───────────────────────────────────────────────
 
-interface ComposeFiles {
-  composeFile: string;
-  agentComposeFile: string;
-  envFile: string;
+/** What we'll actually pass to `docker compose -f <…>` after resolution. */
+export interface ResolvedComposeConfig {
+  /** Absolute paths, in order, of compose files that exist. */
+  composeFiles: string[];
+  /** Absolute path to .env-style file, if it exists. */
+  envFile: string | null;
 }
 
-function resolveComposeFiles(worktreePath: string): ComposeFiles | null {
-  const composeFile = join(worktreePath, 'docker-compose.yml');
-  const agentComposeFile = join(worktreePath, 'docker-compose.agent.yml');
-  const envFile = join(worktreePath, '.env.agent');
-  // We need at least the base compose file. agent override + env are
-  // expected for citemed_web but soft-fail on simpler projects.
-  if (!existsSync(composeFile)) return null;
-  return { composeFile, agentComposeFile, envFile };
+const DEFAULT_COMPOSE_FILES = [
+  'docker-compose.yml',
+  'docker-compose.agent.yml',
+];
+const DEFAULT_ENV_FILE = '.env.agent';
+
+/**
+ * Resolve which compose files + env file to use for an agent. Per-agent
+ * `docker` block in ~/.ranch/config.toml wins; otherwise we fall back
+ * to citemed_web's convention. Files that don't exist on disk are
+ * silently dropped from the list — operator sees what we actually used
+ * via the sidebar's "Compose files" caption.
+ */
+export function resolveComposeFiles(
+  worktreePath: string,
+  config?: AgentDockerConfig,
+): ResolvedComposeConfig | null {
+  const fileNames = config?.composeFiles ?? DEFAULT_COMPOSE_FILES;
+  const composeFiles = fileNames
+    .map((name) => join(worktreePath, name))
+    .filter((p) => existsSync(p));
+  if (composeFiles.length === 0) return null;
+
+  const envFileName = config?.envFile ?? DEFAULT_ENV_FILE;
+  const envPath = join(worktreePath, envFileName);
+  const envFile = existsSync(envPath) ? envPath : null;
+
+  return { composeFiles, envFile };
 }
 
 interface ComposeRunResult {
@@ -254,29 +310,30 @@ async function composeRun(
   args: string[],
   needsFiles: boolean,
   projectOverride?: string,
+  dockerConfig?: AgentDockerConfig,
 ): Promise<ComposeRunResult> {
   const dockerPath = await findDocker();
   if (!dockerPath) {
     return { ok: false, stdout: '', stderr: 'docker not installed' };
   }
-  const project = projectOverride ?? `citemed_${agent}`;
+  const project =
+    projectOverride ?? dockerConfig?.projectName ?? `citemed_${agent}`;
   const composeArgs: string[] = ['compose'];
 
   if (needsFiles) {
-    const files = resolveComposeFiles(worktreePath);
+    const files = resolveComposeFiles(worktreePath, dockerConfig);
     if (!files) {
       return {
         ok: false,
         stdout: '',
-        stderr: `no docker-compose.yml found at ${worktreePath}`,
+        stderr: `no compose files found at ${worktreePath}. Configure via ~/.ranch/config.toml: [agents.<name>.docker].compose_files`,
       };
     }
-    if (existsSync(files.envFile)) {
+    if (files.envFile) {
       composeArgs.push('--env-file', files.envFile);
     }
-    composeArgs.push('-f', files.composeFile);
-    if (existsSync(files.agentComposeFile)) {
-      composeArgs.push('-f', files.agentComposeFile);
+    for (const f of files.composeFiles) {
+      composeArgs.push('-f', f);
     }
   }
 
@@ -303,6 +360,7 @@ async function composeRun(
 export async function dockerStackUp(
   agent: string,
   worktreePath: string,
+  dockerConfig?: AgentDockerConfig,
 ): Promise<ComposeRunResult> {
   // For up: prefer existing project name if there's already a stack
   // running for this agent. Avoids creating a duplicate (e.g. canonical
@@ -314,12 +372,14 @@ export async function dockerStackUp(
     ['up', '-d'],
     true,
     existing ?? undefined,
+    dockerConfig,
   );
 }
 
 export async function dockerStackDown(
   agent: string,
   worktreePath: string,
+  dockerConfig?: AgentDockerConfig,
 ): Promise<ComposeRunResult> {
   // Detect the actual project so we don't issue a no-op `down` against
   // the wrong project name.
@@ -331,12 +391,20 @@ export async function dockerStackDown(
       stderr: '',
     };
   }
-  return composeRun(agent, worktreePath, ['down'], false, existing);
+  return composeRun(
+    agent,
+    worktreePath,
+    ['down'],
+    false,
+    existing,
+    dockerConfig,
+  );
 }
 
 export async function dockerStackRestart(
   agent: string,
   worktreePath: string,
+  dockerConfig?: AgentDockerConfig,
 ): Promise<ComposeRunResult> {
   const existing = await findActiveProjectForAgent(agent);
   if (!existing) {
@@ -346,7 +414,14 @@ export async function dockerStackRestart(
       stderr: 'no active stack to restart — bring it Up first',
     };
   }
-  return composeRun(agent, worktreePath, ['restart'], false, existing);
+  return composeRun(
+    agent,
+    worktreePath,
+    ['restart'],
+    false,
+    existing,
+    dockerConfig,
+  );
 }
 
 /**
@@ -366,9 +441,8 @@ export async function dockerStackRestart(
 export async function dockerStackReset(
   agent: string,
   worktreePath: string,
+  dockerConfig?: AgentDockerConfig,
 ): Promise<ComposeRunResult> {
-  // Detect existing project name (citemed_<agent> vs bare <agent>) so
-  // the down phase actually finds something to remove.
   const existing = await findActiveProjectForAgent(agent);
   if (existing) {
     const downResult = await composeRun(
@@ -377,6 +451,7 @@ export async function dockerStackReset(
       ['down', '-v'],
       false,
       existing,
+      dockerConfig,
     );
     if (!downResult.ok) {
       return {
@@ -386,14 +461,16 @@ export async function dockerStackReset(
       };
     }
   }
-  // Up always uses canonical project name — after a reset the operator
-  // wants the cleanly-prefixed stack going forward.
+  // Up uses the configured project name (or canonical) — after a reset
+  // the operator wants the cleanly-named stack going forward.
+  const project = dockerConfig?.projectName ?? `citemed_${agent}`;
   const upResult = await composeRun(
     agent,
     worktreePath,
     ['up', '-d'],
     true,
-    `citemed_${agent}`,
+    project,
+    dockerConfig,
   );
   return {
     ok: upResult.ok,
@@ -406,6 +483,7 @@ export async function dockerStackLogs(
   agent: string,
   worktreePath: string,
   tail = 200,
+  dockerConfig?: AgentDockerConfig,
 ): Promise<ComposeRunResult> {
   const existing = await findActiveProjectForAgent(agent);
   return composeRun(
@@ -414,5 +492,6 @@ export async function dockerStackLogs(
     ['logs', `--tail=${tail}`, '--no-color'],
     false,
     existing ?? undefined,
+    dockerConfig,
   );
 }

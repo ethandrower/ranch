@@ -53,6 +53,7 @@ const IPC_CHANNELS = {
   appOpenExternal: 'ranch:app:openExternal',
   dockerEnv: 'ranch:docker:env',
   dockerSnapshot: 'ranch:docker:snapshot',
+  dockerResolve: 'ranch:docker:resolve',
   dockerUp: 'ranch:docker:up',
   dockerDown: 'ranch:docker:down',
   dockerRestart: 'ranch:docker:restart',
@@ -137,6 +138,7 @@ const api: RanchApi = {
   docker: {
     env: () => ipcRenderer.invoke(IPC_CHANNELS.dockerEnv),
     snapshot: () => ipcRenderer.invoke(IPC_CHANNELS.dockerSnapshot),
+    resolve: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerResolve, agent),
     up: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerUp, agent),
     down: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerDown, agent),
     restart: (agent) => ipcRenderer.invoke(IPC_CHANNELS.dockerRestart, agent),
