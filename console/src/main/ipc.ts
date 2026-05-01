@@ -25,6 +25,7 @@ import {
   dockerStackUp,
   dockerStackDown,
   dockerStackRestart,
+  dockerStackReset,
   dockerStackLogs,
 } from './docker.js';
 import { getAllNotes, setNote } from './notes.js';
@@ -84,6 +85,7 @@ export const IPC_CHANNELS = {
   dockerUp: 'ranch:docker:up',
   dockerDown: 'ranch:docker:down',
   dockerRestart: 'ranch:docker:restart',
+  dockerReset: 'ranch:docker:reset',
   dockerLogs: 'ranch:docker:logs',
 } as const;
 
@@ -336,6 +338,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.dockerRestart, async (_event, agent: unknown) => {
     const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
     return dockerStackRestart(a, worktreePath);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.dockerReset, async (_event, agent: unknown) => {
+    const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
+    return dockerStackReset(a, worktreePath);
   });
 
   ipcMain.handle(

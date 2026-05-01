@@ -349,6 +349,59 @@ export async function dockerStackRestart(
   return composeRun(agent, worktreePath, ['restart'], false, existing);
 }
 
+/**
+ * Wipe and recreate an agent's stack. Equivalent to:
+ *
+ *   docker compose -p <project> down -v   (-v removes named volumes,
+ *                                           which is the data wipe)
+ *   docker compose --env-file ... -f ... -p <project> up -d
+ *
+ * Destructive: kills containers AND removes their volumes (Postgres
+ * data, Redis state, anything else volume-backed). The next up
+ * recreates containers with empty volumes.
+ *
+ * Returns the combined output of both phases. If down fails, up is
+ * skipped and the caller sees the down error.
+ */
+export async function dockerStackReset(
+  agent: string,
+  worktreePath: string,
+): Promise<ComposeRunResult> {
+  // Detect existing project name (citemed_<agent> vs bare <agent>) so
+  // the down phase actually finds something to remove.
+  const existing = await findActiveProjectForAgent(agent);
+  if (existing) {
+    const downResult = await composeRun(
+      agent,
+      worktreePath,
+      ['down', '-v'],
+      false,
+      existing,
+    );
+    if (!downResult.ok) {
+      return {
+        ok: false,
+        stdout: downResult.stdout,
+        stderr: `[reset:down] ${downResult.stderr}`,
+      };
+    }
+  }
+  // Up always uses canonical project name — after a reset the operator
+  // wants the cleanly-prefixed stack going forward.
+  const upResult = await composeRun(
+    agent,
+    worktreePath,
+    ['up', '-d'],
+    true,
+    `citemed_${agent}`,
+  );
+  return {
+    ok: upResult.ok,
+    stdout: upResult.stdout,
+    stderr: upResult.ok ? '' : `[reset:up] ${upResult.stderr}`,
+  };
+}
+
 export async function dockerStackLogs(
   agent: string,
   worktreePath: string,
