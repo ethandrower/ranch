@@ -72,6 +72,105 @@ body,
   margin-left: auto;
 }
 
+/* ─── Shared infra pill (header) ────────────────────── */
+
+.shared-pill__wrap {
+  position: relative;
+}
+
+.shared-pill {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.shared-pill:hover {
+  border-color: var(--accent);
+}
+
+.shared-pill--up {
+  background: rgba(92, 212, 122, 0.14);
+  color: var(--green);
+  border-color: rgba(92, 212, 122, 0.4);
+}
+
+.shared-pill--partial {
+  background: rgba(246, 193, 119, 0.14);
+  color: var(--yellow);
+  border-color: rgba(246, 193, 119, 0.4);
+}
+
+.shared-pill--down {
+  background: rgba(255, 106, 106, 0.12);
+  color: var(--red);
+  border-color: rgba(255, 106, 106, 0.3);
+}
+
+.shared-pill--none {
+  background: var(--bg);
+  color: var(--text-dim);
+}
+
+.shared-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0.7rem 0.8rem;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  min-width: 320px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.shared-popover__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.shared-popover__title {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+
+.shared-popover__file {
+  background: var(--bg);
+  padding: 0 0.3rem;
+  border-radius: 2px;
+  font-size: 0.68rem;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  align-self: flex-start;
+}
+
+.shared-popover__empty {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 /* ─── Mode tabs ──────────────────────────────────────── */
 
 .mode-tabs {

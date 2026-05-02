@@ -495,3 +495,94 @@ export async function dockerStackLogs(
     dockerConfig,
   );
 }
+
+// ─── Shared infra (citemed_shared: postgres, redis) ─────────────────
+
+const SHARED_PROJECT = 'citemed_shared';
+const SHARED_COMPOSE_FILE = 'docker-compose.shared.yml';
+
+/**
+ * Find a worktree that has the shared compose file, so lifecycle ops
+ * have a directory to run from. All registered worktrees come from the
+ * same repo so any of them works; we just need to pick one that's
+ * actually checked out.
+ */
+function pickSharedWorktree(worktreePaths: string[]): string | null {
+  for (const p of worktreePaths) {
+    if (existsSync(join(p, SHARED_COMPOSE_FILE))) return p;
+  }
+  return null;
+}
+
+async function sharedComposeRun(
+  worktreePaths: string[],
+  args: string[],
+  needsFiles: boolean,
+): Promise<ComposeRunResult> {
+  const dockerPath = await findDocker();
+  if (!dockerPath) {
+    return { ok: false, stdout: '', stderr: 'docker not installed' };
+  }
+  const worktree = pickSharedWorktree(worktreePaths);
+  const composeArgs: string[] = ['compose'];
+  if (needsFiles) {
+    if (!worktree) {
+      return {
+        ok: false,
+        stdout: '',
+        stderr: `${SHARED_COMPOSE_FILE} not found in any registered worktree`,
+      };
+    }
+    composeArgs.push('-f', join(worktree, SHARED_COMPOSE_FILE));
+  }
+  composeArgs.push('-p', SHARED_PROJECT, ...args);
+  try {
+    const { stdout, stderr } = await execFile(dockerPath, composeArgs, {
+      cwd: worktree ?? process.cwd(),
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 120_000,
+    });
+    return { ok: true, stdout, stderr };
+  } catch (err) {
+    const stderr =
+      err && typeof err === 'object' && 'stderr' in err
+        ? String((err as { stderr: unknown }).stderr ?? '')
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, stdout: '', stderr };
+  }
+}
+
+export async function dockerSharedUp(
+  worktreePaths: string[],
+): Promise<ComposeRunResult> {
+  return sharedComposeRun(worktreePaths, ['up', '-d'], true);
+}
+
+export async function dockerSharedDown(
+  worktreePaths: string[],
+): Promise<ComposeRunResult> {
+  return sharedComposeRun(worktreePaths, ['down'], false);
+}
+
+export async function dockerSharedRestart(
+  worktreePaths: string[],
+): Promise<ComposeRunResult> {
+  return sharedComposeRun(worktreePaths, ['restart'], false);
+}
+
+export interface ResolvedSharedDocker {
+  projectName: string;
+  composeFile: string | null;
+}
+
+export function resolveSharedDocker(
+  worktreePaths: string[],
+): ResolvedSharedDocker {
+  const worktree = pickSharedWorktree(worktreePaths);
+  return {
+    projectName: SHARED_PROJECT,
+    composeFile: worktree ? join(worktree, SHARED_COMPOSE_FILE) : null,
+  };
+}

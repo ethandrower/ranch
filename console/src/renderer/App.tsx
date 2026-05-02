@@ -17,6 +17,7 @@ import type {
   RunDetail,
   RunRecord,
   RunStatus,
+  ResolvedSharedDocker,
   SessionState,
   TerminalEnv,
   WorktreeBasics,
@@ -215,6 +216,9 @@ export function App(): JSX.Element {
           {state.appVersion ? `v${state.appVersion}` : ''}
         </span>
         <FleetWarnings snapshot={processSnapshot} />
+        {mode === 'interactive' && (
+          <SharedInfraPill containers={dockerSnapshot.shared} />
+        )}
         {mode === 'interactive' &&
           terminalEnv &&
           !terminalEnv.tmuxAvailable && (
@@ -285,6 +289,176 @@ export function App(): JSX.Element {
         </div>
       ) : (
         <AutomatedView />
+      )}
+    </div>
+  );
+}
+
+// ─── Shared infra pill (postgres + redis) ────────────────────
+
+function SharedInfraPill({
+  containers,
+}: {
+  containers: DockerContainer[];
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [resolved, setResolved] = useState<ResolvedSharedDocker | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent): void {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  // Pull resolved compose path lazily when the popover opens.
+  useEffect(() => {
+    if (!open) return;
+    void window.ranch.docker.sharedResolve().then(setResolved);
+  }, [open]);
+
+  function flash(text: string): void {
+    setMsg(text);
+    setTimeout(() => setMsg(null), 4000);
+  }
+
+  async function withBusy(
+    label: string,
+    fn: () => Promise<{ ok: boolean; stderr: string; stdout: string }>,
+  ): Promise<void> {
+    if (busy) return;
+    setBusy(label);
+    try {
+      const result = await fn();
+      if (result.ok) flash(`${label} succeeded`);
+      else
+        flash(
+          `${label} failed: ${(result.stderr || result.stdout || '').slice(-200) || '(no output)'}`,
+        );
+    } catch (err) {
+      flash(
+        `${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const running = containers.filter((c) => c.state === 'running').length;
+  const total = containers.length;
+  const pillCls =
+    total === 0
+      ? 'shared-pill shared-pill--none'
+      : running === total
+        ? 'shared-pill shared-pill--up'
+        : running === 0
+          ? 'shared-pill shared-pill--down'
+          : 'shared-pill shared-pill--partial';
+
+  return (
+    <div className="shared-pill__wrap" ref={ref}>
+      <button
+        type="button"
+        className={pillCls}
+        onClick={() => setOpen((v) => !v)}
+        title="citemed_shared (postgres + redis)"
+      >
+        shared 🐳 {running}/{total}
+      </button>
+      {open && (
+        <div className="shared-popover">
+          <header className="shared-popover__head">
+            <span className="shared-popover__title">citemed_shared</span>
+            {resolved?.composeFile && (
+              <code
+                className="shared-popover__file"
+                title={resolved.composeFile}
+              >
+                {(() => {
+                  const parts = resolved.composeFile.split('/').filter(Boolean);
+                  return parts.length <= 2
+                    ? resolved.composeFile
+                    : '…/' + parts.slice(-2).join('/');
+                })()}
+              </code>
+            )}
+          </header>
+          {total === 0 ? (
+            <p className="shared-popover__empty">
+              No shared containers. Click <strong>Up</strong> to bring postgres
+              + redis up.
+            </p>
+          ) : (
+            <ul className="docker-services">
+              {containers.map((c) => (
+                <li
+                  key={c.id}
+                  className={`docker-service docker-service--${c.state}`}
+                >
+                  <span className="docker-service__name">
+                    {c.service ?? c.name}
+                  </span>
+                  <span
+                    className={`docker-service__state docker-service__state--${c.state}`}
+                    title={c.status}
+                  >
+                    {c.state}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="docker-actions">
+            <button
+              type="button"
+              className="run-action run-action--approve"
+              onClick={() =>
+                withBusy('Up', () => window.ranch.docker.sharedUp())
+              }
+              disabled={busy !== null}
+              title="docker compose -f docker-compose.shared.yml -p citemed_shared up -d"
+            >
+              {busy === 'Up' ? '…' : 'Up'}
+            </button>
+            <button
+              type="button"
+              className="run-action"
+              onClick={() =>
+                withBusy('Restart', () => window.ranch.docker.sharedRestart())
+              }
+              disabled={busy !== null || total === 0}
+              title="docker compose -p citemed_shared restart"
+            >
+              {busy === 'Restart' ? '…' : 'Restart'}
+            </button>
+            <button
+              type="button"
+              className="run-action run-action--stop"
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Bring down citemed_shared (postgres + redis)?\n\nEvery ranch hand stack relies on these. Their connections will fail until you bring shared back up.',
+                  )
+                )
+                  return;
+                void withBusy('Down', () => window.ranch.docker.sharedDown());
+              }}
+              disabled={busy !== null || total === 0}
+              title="docker compose -p citemed_shared down"
+            >
+              {busy === 'Down' ? '…' : 'Down'}
+            </button>
+          </div>
+          {msg && <p className="run-modal__action-msg">{msg}</p>}
+        </div>
       )}
     </div>
   );
