@@ -25,6 +25,7 @@ import type {
 
 const IPC_CHANNELS = {
   configGet: 'ranch:config:get',
+  configAddAgent: 'ranch:config:addAgent',
   worktreesList: 'ranch:worktrees:list',
   worktreesSession: 'ranch:worktrees:session',
   worktreesGit: 'ranch:worktrees:git',
@@ -86,6 +87,7 @@ function subscribe<T>(
 const api: RanchApi = {
   config: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.configGet),
+    addAgent: (input) => ipcRenderer.invoke(IPC_CHANNELS.configAddAgent, input),
   },
   worktrees: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.worktreesList),

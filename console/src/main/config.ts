@@ -1,8 +1,12 @@
-import { readFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import toml from '@iarna/toml';
+
+const execFile = promisify(execFileCb);
 import type {
   AgentConfig,
   ProjectConfig,
@@ -128,5 +132,189 @@ export async function loadRanchConfig(): Promise<RanchConfig> {
     configPath: CONFIG_PATH,
     projectsPath: PROJECTS_PATH,
     ranchDir: RANCH_DIR,
+  };
+}
+
+// ─── Add agent (write side) ────────────────────────────────────
+
+export interface AddAgentInput {
+  /** New agent name (e.g. "stevie"). Must be unique. */
+  name: string;
+  /** Worktree path. If omitted, defaults to $(HOME)/code/citemed/<name>. */
+  worktree?: string;
+  description?: string;
+  /** Optional canonical port hints (these go into the ports block). */
+  djangoPort?: number;
+  vitePort?: number;
+  /**
+   * If true, ranch shells out to `make init-agent AGENT=<name>` from
+   * citemed_web's Makefile. Creates the git worktree, generates
+   * .env.agent, runs migrations. Requires the agent name to already be
+   * in the Makefile's AGENTS list — currently a manual edit step.
+   */
+  runMakeInitAgent?: boolean;
+}
+
+export interface AddAgentResult {
+  ok: boolean;
+  /** Combined stdout/stderr from `make init-agent` if runMakeInitAgent. */
+  output: string;
+  /** The agent block that was appended to ~/.ranch/config.toml. */
+  configEntry?: string;
+}
+
+/** Locate any worktree we know about that contains a Makefile (citemed_web). */
+async function findCitemedWebMakefile(): Promise<string | null> {
+  const file = await readToml(CONFIG_PATH);
+  const agents = parseAgents(file);
+  for (const a of agents) {
+    const mf = join(a.worktree, 'Makefile');
+    if (existsSync(mf)) return a.worktree;
+  }
+  return null;
+}
+
+function defaultWorktreePath(name: string): string {
+  return join(homedir(), 'code', 'citemed', name);
+}
+
+function escapeTomlString(s: string): string {
+  // For our purposes the values are paths and short text — escape only
+  // backslash and double-quote, fine for basic strings.
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function buildAgentTomlBlock(input: AddAgentInput, worktree: string): string {
+  const lines = [`[agents.${input.name}]`];
+  lines.push(`worktree = "${escapeTomlString(worktree)}"`);
+  if (input.description) {
+    lines.push(`description = "${escapeTomlString(input.description)}"`);
+  }
+  if (input.djangoPort !== undefined || input.vitePort !== undefined) {
+    const parts: string[] = [];
+    if (input.djangoPort !== undefined)
+      parts.push(`django = ${input.djangoPort}`);
+    if (input.vitePort !== undefined) parts.push(`vite = ${input.vitePort}`);
+    lines.push(`ports = { ${parts.join(', ')} }`);
+  }
+  return lines.join('\n');
+}
+
+async function appendToConfigFile(block: string): Promise<void> {
+  const dir = dirname(CONFIG_PATH);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  const existing = existsSync(CONFIG_PATH)
+    ? await readFile(CONFIG_PATH, 'utf8')
+    : '';
+  // Ensure a separating blank line, regardless of whether existing
+  // file ends with newline or not.
+  const sep = existing.endsWith('\n\n')
+    ? ''
+    : existing.endsWith('\n')
+      ? '\n'
+      : '\n\n';
+  const next = existing + sep + block + '\n';
+  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`;
+  await writeFile(tmp, next, 'utf8');
+  await rename(tmp, CONFIG_PATH);
+}
+
+/**
+ * Read just the ports out of a freshly-created .env.agent. Used after
+ * `make init-agent` to capture the canonical ports it allocated.
+ */
+async function readEnvAgentPorts(
+  worktree: string,
+): Promise<{ django?: number; vite?: number }> {
+  const path = join(worktree, '.env.agent');
+  if (!existsSync(path)) return {};
+  const raw = await readFile(path, 'utf8');
+  const out: { django?: number; vite?: number } = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const m = /^([A-Z_]+)=(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const [, key, value] = m;
+    const n = Number.parseInt(value!, 10);
+    if (!Number.isFinite(n)) continue;
+    if (key === 'DJANGO_PORT') out.django = n;
+    if (key === 'VITE_PORT') out.vite = n;
+  }
+  return out;
+}
+
+export async function addAgent(input: AddAgentInput): Promise<AddAgentResult> {
+  const trimmedName = input.name.trim();
+  if (!/^[a-z][a-z0-9_-]*$/.test(trimmedName)) {
+    return {
+      ok: false,
+      output:
+        'Agent name must be lowercase letters/digits/hyphens, starting with a letter.',
+    };
+  }
+  // Reject duplicates.
+  const config = await loadRanchConfig();
+  if (config.agents.some((a) => a.name === trimmedName)) {
+    return { ok: false, output: `Agent '${trimmedName}' already exists.` };
+  }
+
+  const worktree = (input.worktree ?? defaultWorktreePath(trimmedName)).trim();
+
+  let output = '';
+  let djangoPort = input.djangoPort;
+  let vitePort = input.vitePort;
+
+  if (input.runMakeInitAgent) {
+    const makefileDir = await findCitemedWebMakefile();
+    if (!makefileDir) {
+      return {
+        ok: false,
+        output:
+          'No Makefile found in any registered worktree. Either run `make init-agent` manually, or untoggle the option and add the config entry only.',
+      };
+    }
+    try {
+      const { stdout, stderr } = await execFile('make', [
+        '-C',
+        makefileDir,
+        'init-agent',
+        `AGENT=${trimmedName}`,
+      ]);
+      output = stdout + stderr;
+    } catch (err) {
+      const stderr =
+        err && typeof err === 'object' && 'stderr' in err
+          ? String((err as { stderr: unknown }).stderr ?? '')
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      return {
+        ok: false,
+        output: stderr,
+      };
+    }
+    // Pick up ports the Makefile allocated.
+    const detected = await readEnvAgentPorts(worktree);
+    if (detected.django !== undefined && djangoPort === undefined)
+      djangoPort = detected.django;
+    if (detected.vite !== undefined && vitePort === undefined)
+      vitePort = detected.vite;
+  }
+
+  const block = buildAgentTomlBlock(
+    {
+      ...input,
+      name: trimmedName,
+      worktree,
+      ...(djangoPort !== undefined ? { djangoPort } : {}),
+      ...(vitePort !== undefined ? { vitePort } : {}),
+    },
+    worktree,
+  );
+  await appendToConfigFile(block);
+
+  return {
+    ok: true,
+    output,
+    configEntry: block,
   };
 }
