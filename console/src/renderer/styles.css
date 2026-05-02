@@ -1359,6 +1359,52 @@ body,
   text-decoration: underline;
 }
 
+.run-card__open-interactive {
+  background: none;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.run-card__open-interactive:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.run-modal__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.run-modal__open-interactive {
+  background: rgba(106, 162, 255, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(106, 162, 255, 0.4);
+  padding: 0.25rem 0.7rem;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  transition: background 0.12s ease;
+}
+
+.run-modal__open-interactive:hover {
+  background: rgba(106, 162, 255, 0.2);
+  border-color: var(--accent);
+}
+
 /* Run detail modal */
 
 .run-modal__backdrop {

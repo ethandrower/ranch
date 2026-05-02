@@ -310,7 +310,13 @@ export function App(): JSX.Element {
           )}
         </div>
       ) : (
-        <AutomatedView />
+        <AutomatedView
+          onOpenInInteractive={(agent) => {
+            setMode('interactive');
+            setFocusedAgent(agent);
+            setSidebarOpen(true);
+          }}
+        />
       )}
     </div>
   );
@@ -727,7 +733,11 @@ const ACTIVE_STATUSES: RunStatus[] = [
 
 type RunFilter = 'active' | 'all';
 
-function AutomatedView(): JSX.Element {
+function AutomatedView({
+  onOpenInInteractive,
+}: {
+  onOpenInInteractive: (agent: string) => void;
+}): JSX.Element {
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -949,6 +959,7 @@ function AutomatedView(): JSX.Element {
               run={run}
               selected={selectedId === run.id}
               onSelect={() => setSelectedId(run.id)}
+              onOpenInInteractive={onOpenInInteractive}
             />
           ))}
         </div>
@@ -958,6 +969,7 @@ function AutomatedView(): JSX.Element {
         <RunDetailModal
           runId={selectedId}
           onClose={() => setSelectedId(null)}
+          onOpenInInteractive={onOpenInInteractive}
         />
       )}
 
@@ -1165,10 +1177,12 @@ function RunCard({
   run,
   selected,
   onSelect,
+  onOpenInInteractive,
 }: {
   run: RunRecord;
   selected: boolean;
   onSelect: () => void;
+  onOpenInInteractive: (agent: string) => void;
 }): JSX.Element {
   const ageRef = run.endedAt ?? run.startedAt;
   const ageStr = relativeAge(ageRef);
@@ -1229,6 +1243,17 @@ function RunCard({
         {actionHint && (
           <span className="run-card__action-hint">{actionHint}</span>
         )}
+        <button
+          type="button"
+          className="run-card__open-interactive"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenInInteractive(run.agent);
+          }}
+          title={`Switch to Interactive view focused on ${run.agent}`}
+        >
+          → {run.agent}
+        </button>
       </footer>
     </article>
   );
@@ -1269,9 +1294,11 @@ function statusLabel(status: RunStatus): string {
 function RunDetailModal({
   runId,
   onClose,
+  onOpenInInteractive,
 }: {
   runId: number;
   onClose: () => void;
+  onOpenInInteractive: (agent: string) => void;
 }): JSX.Element {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1387,9 +1414,28 @@ function RunDetailModal({
       <div className="run-modal" onClick={(e) => e.stopPropagation()}>
         <header className="run-modal__head">
           <h3>Run #{runId}</h3>
-          <button type="button" className="run-modal__close" onClick={onClose}>
-            ✕
-          </button>
+          <div className="run-modal__head-actions">
+            {detail && (
+              <button
+                type="button"
+                className="run-modal__open-interactive"
+                onClick={() => {
+                  onOpenInInteractive(detail.agent);
+                  onClose();
+                }}
+                title={`Switch to Interactive view focused on ${detail.agent}`}
+              >
+                → Open in Interactive
+              </button>
+            )}
+            <button
+              type="button"
+              className="run-modal__close"
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          </div>
         </header>
         {error && (
           <p className="placeholder placeholder--error">Error: {error}</p>
