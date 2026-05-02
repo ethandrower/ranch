@@ -660,13 +660,30 @@ body,
 .terminal__pane {
   flex: 1;
   min-height: 0;
-  padding: 0.4rem;
+  /* xterm.js sizes itself via FitAddon; we just need to give it a
+     correctly-sized flex container with a small inset. Avoid imposing
+     height:100% on its inner elements — that broke the scrollback
+     viewport's overflow handling and silently disabled wheel scroll. */
+  position: relative;
 }
 
-.terminal__pane .xterm,
-.terminal__pane .xterm-viewport,
-.terminal__pane .xterm-screen {
-  height: 100% !important;
+/* Scrollbar styling — give xterm's viewport a visible, dark scrollbar
+   so it's obvious that scrollback is reachable. */
+.terminal__pane .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.terminal__pane .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal__pane .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+
+.terminal__pane .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
 }
 
 .terminal__overlay {

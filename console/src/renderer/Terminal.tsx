@@ -64,6 +64,14 @@ export function Terminal({
       lineHeight: 1.2,
       cursorBlink: true,
       allowProposedApi: true,
+      // Scroll tuning. Defaults are tiny: 1000 lines of history and a
+      // wheel multiplier of 1, which feels broken on a trackpad.
+      scrollback: 10_000,
+      scrollSensitivity: 3,
+      fastScrollSensitivity: 8,
+      // When the user types, jump back to the bottom — matches every
+      // other terminal app's behavior.
+      scrollOnUserInput: true,
       theme: {
         background: '#0f1115',
         foreground: '#e6e9ef',
