@@ -27,6 +27,7 @@ import {
   dockerStackRestart,
   dockerStackReset,
   dockerStackLogs,
+  resolveAgentDocker,
 } from './docker.js';
 import { getAllNotes, setNote } from './notes.js';
 import {
@@ -39,7 +40,7 @@ import {
   stopRun,
   dispatchRun,
 } from './runs.js';
-import type { DispatchOptions } from '../shared/types.js';
+import type { AgentConfig, DispatchOptions } from '../shared/types.js';
 import {
   attachTerminal,
   detachTerminal,
@@ -82,6 +83,7 @@ export const IPC_CHANNELS = {
   appOpenExternal: 'ranch:app:openExternal',
   dockerEnv: 'ranch:docker:env',
   dockerSnapshot: 'ranch:docker:snapshot',
+  dockerResolve: 'ranch:docker:resolve',
   dockerUp: 'ranch:docker:up',
   dockerDown: 'ranch:docker:down',
   dockerRestart: 'ranch:docker:restart',
@@ -315,6 +317,7 @@ export function registerIpcHandlers(): void {
   async function resolveAgentWorktree(agent: unknown): Promise<{
     agent: string;
     worktreePath: string;
+    dockerConfig: AgentConfig['docker'];
   }> {
     if (typeof agent !== 'string' || !agent) {
       throw new Error('docker call requires an agent name');
@@ -322,35 +325,68 @@ export function registerIpcHandlers(): void {
     const config = await loadRanchConfig();
     const match = config.agents.find((a) => a.name === agent);
     if (!match) throw new Error(`Unknown agent: ${agent}`);
-    return { agent, worktreePath: match.worktree };
+    return {
+      agent,
+      worktreePath: match.worktree,
+      dockerConfig: match.docker,
+    };
   }
 
+  ipcMain.handle(IPC_CHANNELS.dockerResolve, async (_event, agent: unknown) => {
+    const {
+      agent: a,
+      worktreePath,
+      dockerConfig,
+    } = await resolveAgentWorktree(agent);
+    return resolveAgentDocker(a, worktreePath, dockerConfig);
+  });
+
   ipcMain.handle(IPC_CHANNELS.dockerUp, async (_event, agent: unknown) => {
-    const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
-    return dockerStackUp(a, worktreePath);
+    const {
+      agent: a,
+      worktreePath,
+      dockerConfig,
+    } = await resolveAgentWorktree(agent);
+    return dockerStackUp(a, worktreePath, dockerConfig);
   });
 
   ipcMain.handle(IPC_CHANNELS.dockerDown, async (_event, agent: unknown) => {
-    const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
-    return dockerStackDown(a, worktreePath);
+    const {
+      agent: a,
+      worktreePath,
+      dockerConfig,
+    } = await resolveAgentWorktree(agent);
+    return dockerStackDown(a, worktreePath, dockerConfig);
   });
 
   ipcMain.handle(IPC_CHANNELS.dockerRestart, async (_event, agent: unknown) => {
-    const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
-    return dockerStackRestart(a, worktreePath);
+    const {
+      agent: a,
+      worktreePath,
+      dockerConfig,
+    } = await resolveAgentWorktree(agent);
+    return dockerStackRestart(a, worktreePath, dockerConfig);
   });
 
   ipcMain.handle(IPC_CHANNELS.dockerReset, async (_event, agent: unknown) => {
-    const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
-    return dockerStackReset(a, worktreePath);
+    const {
+      agent: a,
+      worktreePath,
+      dockerConfig,
+    } = await resolveAgentWorktree(agent);
+    return dockerStackReset(a, worktreePath, dockerConfig);
   });
 
   ipcMain.handle(
     IPC_CHANNELS.dockerLogs,
     async (_event, agent: unknown, tail: unknown) => {
-      const { agent: a, worktreePath } = await resolveAgentWorktree(agent);
+      const {
+        agent: a,
+        worktreePath,
+        dockerConfig,
+      } = await resolveAgentWorktree(agent);
       const t = typeof tail === 'number' ? tail : 200;
-      return dockerStackLogs(a, worktreePath, t);
+      return dockerStackLogs(a, worktreePath, t, dockerConfig);
     },
   );
 }

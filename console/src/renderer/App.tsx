@@ -13,6 +13,7 @@ import type {
   DockerContainer,
   DockerStackSnapshot,
   ProcessSnapshot,
+  ResolvedAgentDocker,
   RunDetail,
   RunRecord,
   RunStatus,
@@ -1964,6 +1965,24 @@ function DockerSection({
   setBusy: (v: string | null) => void;
   setMsg: (v: string | null) => void;
 }): JSX.Element {
+  const [resolved, setResolved] = useState<ResolvedAgentDocker | null>(null);
+
+  // Pull the resolved compose config so the operator sees what files
+  // ranch actually called docker compose with — and notices missing ones.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await window.ranch.docker.resolve(agent);
+        if (!cancelled) setResolved(r);
+      } catch {
+        // ignore — section just won't show the caption
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agent]);
   function flash(text: string): void {
     setMsg(text);
     setTimeout(() => setMsg(null), 4000);
@@ -2102,8 +2121,60 @@ function DockerSection({
         </button>
       </div>
       {msg && <p className="run-modal__action-msg">{msg}</p>}
+      {resolved && (
+        <div className="docker-config">
+          <p className="docker-config__line">
+            <span className="docker-config__label">project</span>
+            <code>{resolved.projectName}</code>
+          </p>
+          <p className="docker-config__line">
+            <span className="docker-config__label">files</span>
+            <span className="docker-config__paths">
+              {resolved.composeFiles.length === 0 ? (
+                <em>none found</em>
+              ) : (
+                resolved.composeFiles.map((p) => (
+                  <code key={p} title={p}>
+                    {shortenPath(p)}
+                  </code>
+                ))
+              )}
+            </span>
+          </p>
+          {resolved.envFile && (
+            <p className="docker-config__line">
+              <span className="docker-config__label">env</span>
+              <code title={resolved.envFile}>
+                {shortenPath(resolved.envFile)}
+              </code>
+            </p>
+          )}
+          {resolved.missingFiles.length > 0 && (
+            <p className="docker-config__warn">
+              ⚠ configured but missing:{' '}
+              {resolved.missingFiles.map((p) => (
+                <code key={p} title={p}>
+                  {shortenPath(p)}
+                </code>
+              ))}
+            </p>
+          )}
+          <p className="docker-config__hint">
+            Override per-agent in <code>~/.ranch/config.toml</code> →{' '}
+            <code>[agents.{agent}.docker]</code>
+          </p>
+        </div>
+      )}
     </DetailSection>
   );
+}
+
+function shortenPath(p: string): string {
+  // Show just the last two segments (worktree dir + file name) so the
+  // caption is readable. Hover tooltip shows the full path.
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length <= 2) return p;
+  return '…/' + parts.slice(-2).join('/');
 }
 
 /**

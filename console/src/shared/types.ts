@@ -22,6 +22,25 @@ export interface AgentConfig {
    * these and warns if .env.agent disagrees.
    */
   ports?: WorktreePorts;
+  /**
+   * Per-agent docker compose configuration. Optional — if absent we
+   * default to the citemed_web convention:
+   *   compose_files = ["docker-compose.yml", "docker-compose.agent.yml"]
+   *   env_file      = ".env.agent"
+   * Paths are relative to the worktree root.
+   */
+  docker?: AgentDockerConfig;
+}
+
+export interface AgentDockerConfig {
+  composeFiles?: string[];
+  envFile?: string;
+  /**
+   * Override the compose `-p` project name. Defaults to `citemed_<agent>`.
+   * Useful when an agent's stack has historically used a different name
+   * and you want to pin to that.
+   */
+  projectName?: string;
 }
 
 export interface ProjectConfig {
@@ -213,6 +232,16 @@ export interface DockerStackSnapshot {
   perAgent: Record<string, DockerContainer[]>;
   /** citemed_shared stack (postgres, redis, etc.) */
   shared: DockerContainer[];
+}
+
+/** What ranch will actually pass to `docker compose` for an agent. */
+export interface ResolvedAgentDocker {
+  projectName: string;
+  /** Absolute paths of compose files that exist on disk. */
+  composeFiles: string[];
+  envFile: string | null;
+  /** Configured paths that did NOT resolve — surfaced as warnings. */
+  missingFiles: string[];
 }
 
 export interface ComposeRunResult {
@@ -423,6 +452,8 @@ export interface RanchApi {
     env: () => Promise<DockerEnv>;
     /** Fleet snapshot — one `docker ps` per call, all agents + shared. */
     snapshot: () => Promise<DockerStackSnapshot>;
+    /** What compose files + project name ranch will use for this agent. */
+    resolve: (agent: string) => Promise<ResolvedAgentDocker>;
     up: (agent: string) => Promise<ComposeRunResult>;
     down: (agent: string) => Promise<ComposeRunResult>;
     restart: (agent: string) => Promise<ComposeRunResult>;

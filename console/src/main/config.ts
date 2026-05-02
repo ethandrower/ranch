@@ -18,6 +18,7 @@ interface AgentSection {
   worktree?: unknown;
   description?: unknown;
   ports?: unknown;
+  docker?: unknown;
 }
 
 function parsePortsBlock(raw: unknown): WorktreePorts | undefined {
@@ -28,6 +29,26 @@ function parsePortsBlock(raw: unknown): WorktreePorts | undefined {
     if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 65536) {
       out[key] = v;
     }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseDockerBlock(raw: unknown): AgentConfig['docker'] | undefined {
+  if (!isObject(raw)) return undefined;
+  const out: NonNullable<AgentConfig['docker']> = {};
+  // Accept both kebab and snake key names for forgiveness.
+  const filesRaw =
+    raw['compose_files'] ?? raw['composeFiles'] ?? raw['compose-files'];
+  if (Array.isArray(filesRaw)) {
+    const files = filesRaw.filter((s): s is string => typeof s === 'string');
+    if (files.length > 0) out.composeFiles = files;
+  }
+  const envFile = raw['env_file'] ?? raw['envFile'] ?? raw['env-file'];
+  if (typeof envFile === 'string' && envFile.length > 0) out.envFile = envFile;
+  const project =
+    raw['project_name'] ?? raw['projectName'] ?? raw['project-name'];
+  if (typeof project === 'string' && project.length > 0) {
+    out.projectName = project;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -61,6 +82,8 @@ function parseAgents(raw: unknown): AgentConfig[] {
     }
     const ports = parsePortsBlock(section.ports);
     if (ports !== undefined) agent.ports = ports;
+    const docker = parseDockerBlock(section.docker);
+    if (docker !== undefined) agent.docker = docker;
     agents.push(agent);
   }
   return agents;
