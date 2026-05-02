@@ -73,6 +73,10 @@ export function App(): JSX.Element {
     Record<string, number>
   >({});
 
+  // Bump triggers a Terminal remount via the [agent, generation] deps.
+  // The matching default in the AgentCell render is `?? 0` so the very
+  // first bump goes 0 → 1 (a real change) — without that alignment the
+  // first Reconnect/Restart click no-ops because both ends compute 1.
   const bumpTerminalGeneration = useCallback((agent: string) => {
     setTerminalGenerations((prev) => ({
       ...prev,
@@ -280,7 +284,7 @@ export function App(): JSX.Element {
                   note={notes[wt.agent] ?? null}
                   terminalEnv={terminalEnv}
                   focused={focusedAgent === wt.agent}
-                  generation={terminalGenerations[wt.agent] ?? 1}
+                  generation={terminalGenerations[wt.agent] ?? 0}
                   onFocus={() => setFocusedAgent(wt.agent)}
                   onSaveNote={(label) => saveNote(wt.agent, label)}
                   onBumpGeneration={() => bumpTerminalGeneration(wt.agent)}
