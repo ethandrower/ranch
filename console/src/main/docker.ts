@@ -268,10 +268,14 @@ export interface ResolvedComposeConfig {
   envFile: string | null;
 }
 
-const DEFAULT_COMPOSE_FILES = [
-  'docker-compose.yml',
-  'docker-compose.agent.yml',
-];
+// Per-agent stacks are self-contained in docker-compose.agent.yml — its
+// own header literally documents `docker compose -f docker-compose.agent.yml
+// -p citemed_$AGENT_NAME up -d`. Including docker-compose.yml as well
+// (the Makefile's habit) merges the full app stack on top, which
+// duplicates services and competes with citemed_shared. Default is just
+// the agent file. Anyone who needs the override layer can opt in via
+// the per-agent docker.compose_files block in ~/.ranch/config.toml.
+const DEFAULT_COMPOSE_FILES = ['docker-compose.agent.yml'];
 const DEFAULT_ENV_FILE = '.env.agent';
 
 /**
