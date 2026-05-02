@@ -28,6 +28,10 @@ import {
   dockerStackReset,
   dockerStackLogs,
   resolveAgentDocker,
+  dockerSharedUp,
+  dockerSharedDown,
+  dockerSharedRestart,
+  resolveSharedDocker,
 } from './docker.js';
 import { getAllNotes, setNote } from './notes.js';
 import {
@@ -89,6 +93,10 @@ export const IPC_CHANNELS = {
   dockerRestart: 'ranch:docker:restart',
   dockerReset: 'ranch:docker:reset',
   dockerLogs: 'ranch:docker:logs',
+  dockerSharedResolve: 'ranch:docker:sharedResolve',
+  dockerSharedUp: 'ranch:docker:sharedUp',
+  dockerSharedDown: 'ranch:docker:sharedDown',
+  dockerSharedRestart: 'ranch:docker:sharedRestart',
 } as const;
 
 export function registerIpcHandlers(): void {
@@ -389,4 +397,25 @@ export function registerIpcHandlers(): void {
       return dockerStackLogs(a, worktreePath, t, dockerConfig);
     },
   );
+
+  async function allWorktreePaths(): Promise<string[]> {
+    const config = await loadRanchConfig();
+    return config.agents.map((a) => a.worktree);
+  }
+
+  ipcMain.handle(IPC_CHANNELS.dockerSharedResolve, async () => {
+    return resolveSharedDocker(await allWorktreePaths());
+  });
+
+  ipcMain.handle(IPC_CHANNELS.dockerSharedUp, async () => {
+    return dockerSharedUp(await allWorktreePaths());
+  });
+
+  ipcMain.handle(IPC_CHANNELS.dockerSharedDown, async () => {
+    return dockerSharedDown(await allWorktreePaths());
+  });
+
+  ipcMain.handle(IPC_CHANNELS.dockerSharedRestart, async () => {
+    return dockerSharedRestart(await allWorktreePaths());
+  });
 }

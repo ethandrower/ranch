@@ -244,6 +244,13 @@ export interface ResolvedAgentDocker {
   missingFiles: string[];
 }
 
+/** Resolution for the shared (postgres + redis) stack. */
+export interface ResolvedSharedDocker {
+  projectName: string;
+  /** Absolute path; null when no registered worktree contains the file. */
+  composeFile: string | null;
+}
+
 export interface ComposeRunResult {
   ok: boolean;
   stdout: string;
@@ -460,6 +467,11 @@ export interface RanchApi {
     /** Down with -v (wipes volumes) then Up — clean-slate recreate. */
     reset: (agent: string) => Promise<ComposeRunResult>;
     logs: (agent: string, tail?: number) => Promise<ComposeRunResult>;
+    /** citemed_shared (postgres, redis) — fleet-wide, not per-agent. */
+    sharedResolve: () => Promise<ResolvedSharedDocker>;
+    sharedUp: () => Promise<ComposeRunResult>;
+    sharedDown: () => Promise<ComposeRunResult>;
+    sharedRestart: () => Promise<ComposeRunResult>;
   };
 }
 
