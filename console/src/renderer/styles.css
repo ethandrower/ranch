@@ -1771,6 +1771,18 @@ body,
   margin-top: 0.25rem;
 }
 
+.dispatch-form__output {
+  background: rgba(92, 212, 122, 0.06);
+  color: var(--text-muted);
+  border-color: rgba(92, 212, 122, 0.3);
+}
+
+.add-agent__ports {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
 .detail__pr-link {
   color: var(--accent);
   text-decoration: none;

@@ -65,6 +65,7 @@ export function App(): JSX.Element {
   const [focusedAgent, setFocusedAgent] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [mode, setMode] = useState<'interactive' | 'automated'>('interactive');
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
   // Per-agent generation counter — bumping it forces the Terminal
   // component to remount, which triggers a fresh tmux attach. Used by
   // the "Restart Claude" action.
@@ -229,6 +230,16 @@ export function App(): JSX.Element {
         {mode === 'interactive' && (
           <button
             type="button"
+            className="sidebar-toggle"
+            onClick={() => setAddAgentOpen(true)}
+            title="Register a new ranch hand and optionally bootstrap its worktree"
+          >
+            + Add ranchhand
+          </button>
+        )}
+        {mode === 'interactive' && (
+          <button
+            type="button"
             className={`sidebar-toggle${sidebarOpen ? ' sidebar-toggle--open' : ''}`}
             onClick={() => setSidebarOpen((v) => !v)}
             title={sidebarOpen ? 'Hide detail sidebar' : 'Show detail sidebar'}
@@ -237,6 +248,17 @@ export function App(): JSX.Element {
           </button>
         )}
       </header>
+      {addAgentOpen && (
+        <AddAgentModal
+          onClose={() => setAddAgentOpen(false)}
+          onAdded={() => {
+            setAddAgentOpen(false);
+            void window.ranch.worktrees.list().then((worktrees) => {
+              setState((prev) => ({ ...prev, worktrees }));
+            });
+          }}
+        />
+      )}
       {mode === 'interactive' ? (
         <div className={`app__body${sidebarOpen ? ' app__body--sidebar' : ''}`}>
           <main className="app__grid">
@@ -290,6 +312,184 @@ export function App(): JSX.Element {
       ) : (
         <AutomatedView />
       )}
+    </div>
+  );
+}
+
+// ─── Add ranchhand modal ─────────────────────────────────────
+
+function AddAgentModal({
+  onClose,
+  onAdded,
+}: {
+  onClose: () => void;
+  onAdded: (name: string) => void;
+}): JSX.Element {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [worktree, setWorktree] = useState('');
+  const [djangoPort, setDjangoPort] = useState('');
+  const [vitePort, setVitePort] = useState('');
+  const [runMake, setRunMake] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [output, setOutput] = useState<string | null>(null);
+
+  async function submit(e: FormEvent): Promise<void> {
+    e.preventDefault();
+    if (busy) return;
+    if (!name.trim()) {
+      setError('Name is required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setOutput(null);
+    try {
+      const dj = djangoPort.trim() ? Number.parseInt(djangoPort, 10) : NaN;
+      const vt = vitePort.trim() ? Number.parseInt(vitePort, 10) : NaN;
+      const result = await window.ranch.config.addAgent({
+        name: name.trim(),
+        ...(worktree.trim() ? { worktree: worktree.trim() } : {}),
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(Number.isFinite(dj) ? { djangoPort: dj } : {}),
+        ...(Number.isFinite(vt) ? { vitePort: vt } : {}),
+        runMakeInitAgent: runMake,
+      });
+      if (!result.ok) {
+        setError(result.output);
+        return;
+      }
+      setOutput(result.output);
+      // Brief pause so the operator sees the success state, then close.
+      setTimeout(() => onAdded(name.trim()), 400);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="run-modal__backdrop" onClick={onClose}>
+      <div className="run-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="run-modal__head">
+          <h3>Add ranchhand</h3>
+          <button
+            type="button"
+            className="run-modal__close"
+            onClick={onClose}
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </header>
+        <form className="run-modal__body dispatch-form" onSubmit={submit}>
+          <label className="dispatch-form__field">
+            <span className="dispatch-form__label">Name</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="stevie"
+              disabled={busy}
+              className="dispatch-form__input"
+              autoFocus
+            />
+          </label>
+
+          <label className="dispatch-form__field">
+            <span className="dispatch-form__label">Description (optional)</span>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Ranch hand #5"
+              disabled={busy}
+              className="dispatch-form__input"
+            />
+          </label>
+
+          <label className="dispatch-form__field">
+            <span className="dispatch-form__label">
+              Worktree path (optional — defaults to ~/code/citemed/&lt;name&gt;)
+            </span>
+            <input
+              type="text"
+              value={worktree}
+              onChange={(e) => setWorktree(e.target.value)}
+              placeholder=""
+              disabled={busy}
+              className="dispatch-form__input"
+            />
+          </label>
+
+          <div className="dispatch-form__field">
+            <span className="dispatch-form__label">
+              Canonical ports (optional — set if not running make init-agent)
+            </span>
+            <div className="add-agent__ports">
+              <input
+                type="number"
+                value={djangoPort}
+                onChange={(e) => setDjangoPort(e.target.value)}
+                placeholder="Django (e.g. 8005)"
+                disabled={busy}
+                className="dispatch-form__input"
+              />
+              <input
+                type="number"
+                value={vitePort}
+                onChange={(e) => setVitePort(e.target.value)}
+                placeholder="Vite (e.g. 3005)"
+                disabled={busy}
+                className="dispatch-form__input"
+              />
+            </div>
+          </div>
+
+          <label className="dispatch-form__toggle">
+            <input
+              type="checkbox"
+              checked={runMake}
+              onChange={(e) => setRunMake(e.target.checked)}
+              disabled={busy}
+            />
+            <span>
+              <strong>Run make init-agent</strong> — bootstrap the worktree,
+              generate <code>.env.agent</code>, run migrations. Requires the
+              agent name to already be in citemed_web&apos;s Makefile{' '}
+              <code>AGENTS</code> list. Untoggle if you just want to register an
+              already-existing worktree in ranch&apos;s config.
+            </span>
+          </label>
+
+          {error && <pre className="dispatch-form__error">{error}</pre>}
+          {output && (
+            <pre className="dispatch-form__error dispatch-form__output">
+              {output.trim().slice(-1200)}
+            </pre>
+          )}
+
+          <div className="dispatch-form__buttons">
+            <button
+              type="button"
+              className="run-action"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="run-action run-action--approve"
+              disabled={busy}
+            >
+              {busy ? 'Adding…' : 'Add ranchhand'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

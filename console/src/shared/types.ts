@@ -397,9 +397,26 @@ export type Unsubscribe = () => void;
 
 // ─── IPC surface ─────────────────────────────────────────────────────────
 
+export interface AddAgentInput {
+  name: string;
+  worktree?: string;
+  description?: string;
+  djangoPort?: number;
+  vitePort?: number;
+  runMakeInitAgent?: boolean;
+}
+
+export interface AddAgentResult {
+  ok: boolean;
+  /** Combined stdout/stderr from `make init-agent`, or an error message. */
+  output: string;
+  configEntry?: string;
+}
+
 export interface RanchApi {
   config: {
     get: () => Promise<RanchConfig>;
+    addAgent: (input: AddAgentInput) => Promise<AddAgentResult>;
   };
   worktrees: {
     list: () => Promise<WorktreeBasics[]>;

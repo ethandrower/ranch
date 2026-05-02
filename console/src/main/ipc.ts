@@ -14,7 +14,7 @@
  */
 
 import { app, ipcMain, shell } from 'electron';
-import { loadRanchConfig } from './config.js';
+import { loadRanchConfig, addAgent } from './config.js';
 import { listWorktrees } from './worktrees.js';
 import { getActiveSession } from './transcript.js';
 import { getWorktreeGitState } from './git.js';
@@ -57,6 +57,7 @@ import {
 
 export const IPC_CHANNELS = {
   configGet: 'ranch:config:get',
+  configAddAgent: 'ranch:config:addAgent',
   worktreesList: 'ranch:worktrees:list',
   worktreesSession: 'ranch:worktrees:session',
   worktreesGit: 'ranch:worktrees:git',
@@ -101,6 +102,30 @@ export const IPC_CHANNELS = {
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.configGet, async () => loadRanchConfig());
+
+  ipcMain.handle(IPC_CHANNELS.configAddAgent, async (_event, raw: unknown) => {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new Error('config.addAgent needs an input object');
+    }
+    const i = raw as Record<string, unknown>;
+    if (typeof i['name'] !== 'string' || !i['name'].trim()) {
+      throw new Error('config.addAgent needs a name');
+    }
+    return addAgent({
+      name: i['name'],
+      ...(typeof i['worktree'] === 'string' && i['worktree']
+        ? { worktree: i['worktree'] }
+        : {}),
+      ...(typeof i['description'] === 'string' && i['description']
+        ? { description: i['description'] }
+        : {}),
+      ...(typeof i['djangoPort'] === 'number'
+        ? { djangoPort: i['djangoPort'] }
+        : {}),
+      ...(typeof i['vitePort'] === 'number' ? { vitePort: i['vitePort'] } : {}),
+      runMakeInitAgent: i['runMakeInitAgent'] === true,
+    });
+  });
   ipcMain.handle(IPC_CHANNELS.worktreesList, async () => listWorktrees());
 
   ipcMain.handle(
