@@ -24,6 +24,7 @@ import type {
   RunRecord,
   RunStatus,
 } from '../shared/types.js';
+import { getActiveSession } from './transcript.js';
 
 const execFile = promisify(execFileCb);
 
@@ -303,6 +304,14 @@ function rowToCheckpoint(row: Record<string, unknown>): RunCheckpoint {
   };
   const summary = asString(row['summary']);
   if (summary) cp.summary = summary;
+  const payloadJson = asString(row['payload_json']);
+  if (payloadJson) {
+    try {
+      cp.payload = JSON.parse(payloadJson);
+    } catch {
+      cp.payload = payloadJson;
+    }
+  }
   const createdAt = asString(row['created_at']);
   if (createdAt) cp.createdAt = createdAt;
   const decidedAt = asString(row['decided_at']);
@@ -385,16 +394,18 @@ export async function cleanupAbandonedRuns(): Promise<number> {
 export async function getRun(id: number): Promise<RunDetail | null> {
   const runRows = (await query(
     `SELECT id, agent, ticket, state, dispatch_mode, started_at, ended_at,
-            initial_prompt, pid, log_path, branch_name, pr_url
+            initial_prompt, pid, log_path, branch_name, pr_url, cwd
      FROM runs WHERE id = ${Number(id)} LIMIT 1`,
   )) as Record<string, unknown>[];
   const row = runRows[0];
   if (!row) return null;
   const run = rowToRunRecord(row);
 
+  // payload_json carries structured metadata (file lists, diff stats)
+  // alongside the human-readable summary. Fetch and surface both.
   const checkpointRows = (await query(
-    `SELECT id, run_id, kind, summary, created_at, decision, decision_note,
-            decided_at
+    `SELECT id, run_id, kind, summary, payload_json, created_at, decision,
+            decision_note, decided_at
      FROM checkpoints WHERE run_id = ${Number(id)} ORDER BY id`,
   )) as Record<string, unknown>[];
   const checkpoints = checkpointRows.map(rowToCheckpoint);
@@ -415,5 +426,26 @@ export async function getRun(id: number): Promise<RunDetail | null> {
     interjections,
   };
   if (initialPromptFull) detail.initialPrompt = initialPromptFull;
+
+  // Pull the latest assistant text from the run's transcript so the
+  // operator has full conversation context before approving/rejecting
+  // a pending checkpoint. The SDK orchestrator writes to the same
+  // ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl convention as
+  // the interactive CLI, so getActiveSession works here.
+  const cwd = asString(row['cwd']);
+  if (cwd) {
+    try {
+      const session = await getActiveSession(cwd);
+      if (session.lastAssistantText) {
+        detail.latestAssistantText = session.lastAssistantText;
+      }
+      if (session.lastActivityAt) {
+        detail.lastTranscriptActivityAt = session.lastActivityAt;
+      }
+    } catch {
+      // ignore — modal still renders without it
+    }
+  }
+
   return detail;
 }
