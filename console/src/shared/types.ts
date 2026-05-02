@@ -314,7 +314,13 @@ export interface RunCheckpoint {
   id: number;
   runId: number;
   kind: string;
+  /** The plan / diff summary text the agent submitted at this checkpoint. */
   summary?: string;
+  /**
+   * Structured metadata the agent attached (file lists, diff stats,
+   * etc.) — already JSON-parsed so the renderer can pretty-print it.
+   */
+  payload?: unknown;
   createdAt?: string;
   decision: 'pending' | 'approved' | 'rejected' | string;
   decisionNote?: string;
@@ -333,6 +339,14 @@ export interface RunInterjection {
 export interface RunDetail extends RunRecord {
   /** The full, untruncated initial_prompt. */
   initialPrompt?: string;
+  /**
+   * Claude's most recent assistant text from the run's transcript —
+   * lets the operator see the actual conversation context before
+   * approving/rejecting a pending checkpoint.
+   */
+  latestAssistantText?: string;
+  /** ISO timestamp of latest activity from the transcript. */
+  lastTranscriptActivityAt?: string;
   checkpoints: RunCheckpoint[];
   interjections: RunInterjection[];
 }

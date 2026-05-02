@@ -1500,6 +1500,17 @@ function RunDetailModal({
               </DetailSection>
             )}
 
+            {/* Latest from claude — what the agent has actually said in
+                the conversation, so the operator has context before
+                approving or rejecting the pending checkpoint. */}
+            {detail.latestAssistantText && (
+              <DetailSection
+                title={`Latest from claude${detail.lastTranscriptActivityAt ? ` · ${relativeAge(detail.lastTranscriptActivityAt)} ago` : ''}`}
+              >
+                <pre className="run-cp__body">{detail.latestAssistantText}</pre>
+              </DetailSection>
+            )}
+
             <DetailSection
               title="Checkpoints"
               count={detail.checkpoints.length}
@@ -1508,24 +1519,45 @@ function RunDetailModal({
                 <p className="detail__empty">no checkpoints recorded</p>
               ) : (
                 <ul className="run-cps">
-                  {detail.checkpoints.map((cp) => (
-                    <li key={cp.id} className={`run-cp run-cp--${cp.decision}`}>
-                      <span className="run-cp__kind">{cp.kind}</span>
-                      <span
-                        className={`run-cp__decision run-cp__decision--${cp.decision}`}
+                  {detail.checkpoints.map((cp) => {
+                    const pending = cp.decision === 'pending';
+                    return (
+                      <li
+                        key={cp.id}
+                        className={`run-cp run-cp--${cp.decision}${pending ? ' run-cp--pending' : ''}`}
                       >
-                        {cp.decision}
-                      </span>
-                      {cp.summary && (
-                        <span className="run-cp__summary">{cp.summary}</span>
-                      )}
-                      {cp.decisionNote && (
-                        <span className="run-cp__note">
-                          — {cp.decisionNote}
-                        </span>
-                      )}
-                    </li>
-                  ))}
+                        <div className="run-cp__head">
+                          <span className="run-cp__kind">{cp.kind}</span>
+                          <span
+                            className={`run-cp__decision run-cp__decision--${cp.decision}`}
+                          >
+                            {cp.decision}
+                          </span>
+                          {cp.createdAt && (
+                            <span className="run-cp__age">
+                              {relativeAge(cp.createdAt)} ago
+                            </span>
+                          )}
+                        </div>
+                        {cp.summary && (
+                          <pre className="run-cp__body">{cp.summary}</pre>
+                        )}
+                        {cp.payload !== undefined && cp.payload !== null && (
+                          <details className="run-cp__payload">
+                            <summary>payload</summary>
+                            <pre className="run-cp__body run-cp__body--mono">
+                              {JSON.stringify(cp.payload, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                        {cp.decisionNote && (
+                          <p className="run-cp__note">
+                            <strong>note:</strong> {cp.decisionNote}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </DetailSection>

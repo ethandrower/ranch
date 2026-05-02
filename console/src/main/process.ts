@@ -42,7 +42,12 @@ interface SnapshotInput {
 async function listRanchTmuxSessions(): Promise<Map<string, TmuxSessionState>> {
   const out = new Map<string, TmuxSessionState>();
   try {
+    // Ranch tmux sessions live on the dedicated `ranch` socket — see
+    // pty.ts. Without -L we'd be reading the user's default tmux
+    // server which won't have our sessions.
     const { stdout } = await execFile('tmux', [
+      '-L',
+      'ranch',
       'list-sessions',
       '-F',
       '#{session_name}|#{session_attached}|#{session_created}',

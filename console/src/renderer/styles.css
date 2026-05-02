@@ -1872,22 +1872,40 @@ body,
 
 .run-cp {
   display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 0.4rem;
   font-size: 0.78rem;
   color: var(--text-muted);
-  padding: 0.35rem 0.55rem;
+  padding: 0.5rem 0.65rem;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+.run-cp--pending {
+  border-color: rgba(246, 193, 119, 0.5);
+  background: rgba(246, 193, 119, 0.04);
+}
+
+.run-cp__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.run-cp__age {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  font-style: italic;
+  margin-left: auto;
 }
 
 .run-cp__kind {
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-weight: 600;
   color: var(--accent);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
 }
 
 .run-cp__decision {
@@ -1916,17 +1934,56 @@ body,
   border-color: rgba(246, 193, 119, 0.4);
 }
 
-.run-cp__summary {
-  flex: 1;
-  min-width: 0;
+/* The plan / diff summary text the agent submitted at this checkpoint —
+   used to be one ellipsis-truncated line, which made it impossible to
+   read what claude was asking. Now full multi-line, scrollable, mono
+   for code/diff fidelity. */
+.run-cp__body {
+  margin: 0;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.77rem;
+  line-height: 1.5;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elevated);
+  padding: 0.5rem 0.65rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.run-cp__body--mono {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.run-cp__payload {
+  font-size: 0.72rem;
+}
+
+.run-cp__payload > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0.15rem 0;
+  user-select: none;
+}
+
+.run-cp__payload > summary:hover {
+  color: var(--text);
 }
 
 .run-cp__note {
-  color: var(--text-dim);
-  font-style: italic;
-  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(106, 162, 255, 0.06);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 3px 3px 0;
+}
+
+.run-cp__note strong {
+  color: var(--accent);
 }
