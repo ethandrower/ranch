@@ -64,13 +64,17 @@ export function Terminal({
       lineHeight: 1.2,
       cursorBlink: true,
       allowProposedApi: true,
-      // Scroll tuning. Defaults are tiny: 1000 lines of history and a
-      // wheel multiplier of 1, which feels broken on a trackpad.
+      // Wheel events are forwarded to the pty (which is tmux) — tmux's
+      // smart-wheel config (see pty.ts) auto-enters copy-mode in
+      // alt-screen apps so scrolling always works. xterm.js's own
+      // scrollback only matters when the inner program is NOT in
+      // alt-screen (rare for our use case), but we keep a generous
+      // buffer anyway.
       scrollback: 10_000,
-      scrollSensitivity: 3,
-      fastScrollSensitivity: 8,
-      // When the user types, jump back to the bottom — matches every
-      // other terminal app's behavior.
+      // Sensitivity 1 keeps wheel events one-to-one with what tmux
+      // expects; cranking it makes copy-mode jump too aggressively.
+      scrollSensitivity: 1,
+      fastScrollSensitivity: 5,
       scrollOnUserInput: true,
       theme: {
         background: '#0f1115',
