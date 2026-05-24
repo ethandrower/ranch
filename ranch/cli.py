@@ -613,6 +613,81 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.command("propose")
+@click.argument("ticket", type=str)
+@click.option("--agent", default=None, help="Agent whose worktree to run in. Required if --cwd isn't given.")
+@click.option("--cwd", default=None, type=click.Path(exists=True, file_okay=False, resolve_path=True), help="Override the cwd; defaults to the agent's configured worktree.")
+@click.option("--budget", default=None, type=float, help="Override the wall-clock budget in seconds (default 180).")
+@click.option("--auto-approve", is_flag=True, help="Don't block waiting for !approve (use when chaining into ranch run).")
+def propose_cmd(ticket, agent, cwd, budget, auto_approve):
+    """Run a bounded plan + acceptance proposal session for a ticket (Phase H6).
+
+    Reads the saved scope bundle from ~/.ranch/scopes/<ticket>.md, runs an
+    SDK session with file-modification tools disabled, and produces a final
+    parked dossier with the plan + acceptance criteria.
+    """
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+    from .config import AGENTS, reload_agents
+    from .propose import (
+        DEFAULT_PROPOSE_BUDGET_SECONDS,
+        PROPOSE_ALLOWED_TOOLS,
+        PROPOSE_SYSTEM_PROMPT,
+        ProposeError,
+        build_propose_brief,
+        resolve_scope_markdown,
+    )
+    from .runner.orchestrator import Orchestrator
+
+    try:
+        scope_md = resolve_scope_markdown(ticket)
+    except ProposeError as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    if cwd:
+        worktree = _Path(cwd)
+        agent_name = agent or "ad-hoc"
+    elif agent:
+        reload_agents()
+        if agent not in AGENTS:
+            console.print(f"[red]Unknown agent '{agent}'. Configure it in ~/.ranch/config.toml.[/red]")
+            raise click.Abort()
+        worktree = AGENTS[agent].worktree
+        agent_name = agent
+    else:
+        console.print("[red]Must specify --agent or --cwd.[/red]")
+        raise click.Abort()
+
+    brief = build_propose_brief(ticket, scope_md)
+    budget_seconds = budget if budget is not None else DEFAULT_PROPOSE_BUDGET_SECONDS
+
+    orch = Orchestrator(
+        agent=agent_name,
+        cwd=worktree,
+        ticket=ticket,
+        brief=brief,
+        free=True,
+        auto_approve=auto_approve,
+        allowed_tools_override=PROPOSE_ALLOWED_TOOLS,
+        budget_seconds=budget_seconds,
+        append_system_prompt_override=PROPOSE_SYSTEM_PROMPT,
+    )
+
+    console.print(f"[bold cyan]Propose session — ticket {ticket} / agent {agent_name} / budget {budget_seconds:.0f}s[/bold cyan]")
+    console.print(f"[dim]cwd: {worktree}[/dim]")
+    console.print(f"[dim]Tools restricted to: {', '.join(PROPOSE_ALLOWED_TOOLS)}[/dim]\n")
+
+    try:
+        _asyncio.run(orch.run())
+    except KeyboardInterrupt:
+        console.print("[yellow]Interrupted.[/yellow]")
+        return
+
+    console.print(f"\n[bold]Proposal result — run #{orch.run_id}[/bold]")
+    console.print(f"[dim]Inspect with: ranch dossier {orch.run_id}[/dim]")
+
+
 @cli.command("scope")
 @click.argument("ticket_key", type=str)
 @click.option("--save", is_flag=True, help="Persist the bundle to ~/.ranch/scopes/<key>.md for downstream consumption by `ranch propose` / `ranch run`.")

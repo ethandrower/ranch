@@ -40,14 +40,36 @@ def _detect_branch(cwd: Path) -> str | None:
         return None
 
 
+DEFAULT_ALLOWED_TOOLS = [
+    "Read", "Write", "Edit", "Bash", "Grep", "Glob",
+    "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
+    "mcp__ranch__record_state",
+]
+
+
 class Orchestrator:
-    def __init__(self, agent: str, cwd: Path, ticket: str | None, brief: str, free: bool = False, auto_approve: bool = False):
+    def __init__(
+        self,
+        agent: str,
+        cwd: Path,
+        ticket: str | None,
+        brief: str,
+        free: bool = False,
+        auto_approve: bool = False,
+        *,
+        allowed_tools_override: list[str] | None = None,
+        budget_seconds: float | None = None,
+        append_system_prompt_override: str | None = None,
+    ):
         self.agent = agent
         self.cwd = cwd
         self.ticket = ticket
         self.brief = brief
         self.free = free
         self.auto_approve = auto_approve
+        self.allowed_tools_override = allowed_tools_override
+        self.budget_seconds = budget_seconds
+        self.append_system_prompt_override = append_system_prompt_override
         self.run_id: int | None = None
         self.sdk_session_id: str | None = None
 
@@ -138,15 +160,18 @@ class Orchestrator:
         # behavior — including auto-loading the worktree's CLAUDE.md — still
         # runs. Setting system_prompt= would suppress CLAUDE.md and the agent
         # would miss project conventions like "branch off develop, not main".
+        effective_append = (
+            self.append_system_prompt_override
+            if self.append_system_prompt_override is not None
+            else (SYSTEM_PROMPT_FREE if self.free else SYSTEM_PROMPT)
+        )
+        effective_tools = self.allowed_tools_override or DEFAULT_ALLOWED_TOOLS
+
         options = ClaudeCodeOptions(
             cwd=str(self.cwd),
-            append_system_prompt=SYSTEM_PROMPT_FREE if self.free else SYSTEM_PROMPT,
+            append_system_prompt=effective_append,
             mcp_servers={"ranch": ranch_mcp},
-            allowed_tools=[
-                "Read", "Write", "Edit", "Bash", "Grep", "Glob",
-                "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
-                "mcp__ranch__record_state",
-            ],
+            allowed_tools=effective_tools,
             hooks={"PostToolUse": [make_checkpoint_hook(self), make_dossier_hook(self)]},
             permission_mode="acceptEdits",
         )
@@ -163,15 +188,18 @@ class Orchestrator:
                 #   auto-approve mode is active (no human driver)
                 stdin_task = None
                 poll_task = None
+                budget_task = None
                 if not self.auto_approve:
                     poll_task = asyncio.create_task(self._db_poll_loop(client))
                     if sys.stdin.isatty():
                         stdin_task = asyncio.create_task(self._stdin_loop())
+                if self.budget_seconds is not None:
+                    budget_task = asyncio.create_task(self._budget_watchdog())
 
                 try:
                     await self._main_loop(client)
                 finally:
-                    for task in (stdin_task, poll_task):
+                    for task in (stdin_task, poll_task, budget_task):
                         if task is not None:
                             task.cancel()
                             try:
@@ -237,6 +265,21 @@ class Orchestrator:
     #   CLI commands — `ranch approve/reject/note/stop <run_id>` from any shell
     # A single db_poll_loop consumes pending rows and dispatches them.
     # The 500ms poll latency is fine for human-driven interjections.
+
+    async def _budget_watchdog(self) -> None:
+        """If budget_seconds is set, signal stop after that many seconds.
+
+        The main loop checks self.stop_requested between turns and exits
+        cleanly — we don't cancel mid-tool-use, which keeps SDK state sane.
+        """
+        if self.budget_seconds is None:
+            return
+        await asyncio.sleep(self.budget_seconds)
+        console.print(f"[yellow]Budget of {self.budget_seconds}s exhausted — requesting stop.[/yellow]")
+        self.stop_requested = True
+        # Unblock any in-flight checkpoint approval waiter so the loop can wind down
+        self._approval_result = "stopped"
+        self._approval_ready.set()
 
     async def _stdin_loop(self) -> None:
         """Read `!cmd` lines from stdin and enqueue them as Interjection rows.
