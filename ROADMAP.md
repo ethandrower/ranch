@@ -386,7 +386,7 @@ The "polling now, webhooks later" call: each agent's pilot daemon polls every ~3
 - H3 (#73) — Interactive takeover (pause → `claude --resume` → orchestrated resume)
 - H4 (#74) — `ranch triage` — rank assigned Jira tickets [in flight]
 - H5 (#75) — `ranch scope <ticket>` — context bundle [in flight]
-- H6 (#76) — `ranch propose <ticket>` — bounded plan + acceptance criteria
+- H6 (#76) — `ranch propose <ticket>` — bounded plan + acceptance criteria [in flight]
 - H7 (#77) — `ranch design <ticket>` — figma frame discovery
 - H8 (#78) — Self-judge integration loop
 - H9 (#79) — Ethan-labs deploy handoff
