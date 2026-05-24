@@ -113,6 +113,98 @@ async def test_on_state_persists_dossier_row():
         assert payload["just_did"] == "Finished reading the ticket and the linked epic."
 
 
+# ─── CLI helpers (Phase H2c) ──────────────────────────────────────
+
+
+def _persist_dossier(run_id: int, **overrides):
+    """Test helper — write a Dossier row directly."""
+    from ranch.runner.messages import RecordStateInput
+    data = {
+        "plan": [{"step": "Plan it", "status": "done"}],
+        "just_did": "Wrote the plan.",
+        "state": "planning",
+    }
+    data.update(overrides)
+    payload = RecordStateInput.model_validate(data)
+    with db_session() as db:
+        row = Dossier(run_id=run_id, state=payload.state, payload_json=payload.model_dump_json())
+        db.add(row)
+
+
+def test_fetch_latest_dossier_returns_none_for_missing_run():
+    from ranch.cli import _fetch_latest_dossier
+    init_db()
+    run, payload = _fetch_latest_dossier(999_999)
+    assert run is None
+    assert payload is None
+
+
+def test_fetch_latest_dossier_returns_none_payload_when_no_dossier():
+    from ranch.cli import _fetch_latest_dossier
+    rid = _make_run(ticket="TEST-NODOSS")
+    run, payload = _fetch_latest_dossier(rid)
+    assert run is not None
+    assert run["agent"] == "max"
+    assert payload is None
+
+
+def test_fetch_latest_dossier_returns_most_recent():
+    from ranch.cli import _fetch_latest_dossier
+    rid = _make_run(ticket="TEST-LATEST")
+    _persist_dossier(rid, state="planning", just_did="First.")
+    # SQLite created_at resolution: nudge before the second insert
+    import time as _time
+    _time.sleep(0.01)
+    _persist_dossier(rid, state="parked", just_did="Final.", blocker="Need approval.")
+    run, payload = _fetch_latest_dossier(rid)
+    assert payload["state"] == "parked"
+    assert payload["blocker"] == "Need approval."
+    assert "_updated_at" in payload  # surfaced for "last updated X ago" UI later
+
+
+def test_render_dossier_panel_handles_missing_payload():
+    """Render shouldn't blow up when there's no dossier yet."""
+    from ranch.cli import _render_dossier_panel
+    panel = _render_dossier_panel({"id": 1, "agent": "max", "ticket": None, "state": "queued"}, None)
+    # Just ensure it constructs; rich will render it on console.print
+    assert panel is not None
+
+
+def test_render_dossier_panel_includes_all_sections():
+    from ranch.cli import _render_dossier_panel
+    payload = {
+        "state": "parked",
+        "just_did": "Tests green.",
+        "blocker": "Need pre_push approval.",
+        "plan": [
+            {"step": "Plan it", "status": "done"},
+            {"step": "Build it", "status": "in_progress", "notes": "halfway through"},
+        ],
+        "options": [{"label": "approve", "description": "Proceed."}],
+        "files_touched": ["a.py", "b.py"],
+    }
+    panel = _render_dossier_panel(
+        {"id": 42, "agent": "jeffy", "ticket": "ECD-1", "state": "needs_approval"},
+        payload,
+    )
+    # Walk the renderable's plain text to check content survived rendering setup.
+    from io import StringIO
+    from rich.console import Console
+    buf = StringIO()
+    Console(file=buf, force_terminal=False, width=120).print(panel)
+    output = buf.getvalue()
+    assert "Run #42" in output
+    assert "jeffy / ECD-1" in output
+    assert "parked" in output
+    assert "Tests green." in output
+    assert "Need pre_push approval." in output
+    assert "Plan it" in output
+    assert "Build it" in output
+    assert "halfway through" in output
+    assert "approve" in output
+    assert "Files touched" in output
+
+
 @pytest.mark.asyncio
 async def test_on_state_accumulates_history_and_latest_wins():
     run_id = _make_run()
