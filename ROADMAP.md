@@ -381,8 +381,8 @@ The "polling now, webhooks later" call: each agent's pilot daemon polls every ~3
 
 ### Issues
 
-- H1 (#71) — Dossier schema + `record_state` MCP tool [in flight]
-- H2 (#72) — Dossier persistence + console rendering
+- H1 (#71) — Dossier schema + `record_state` MCP tool [PR #82]
+- H2 (#72) — Dossier persistence + console rendering [H2a backend in flight; H2b console rendering follows]
 - H3 (#73) — Interactive takeover (pause → `claude --resume` → orchestrated resume)
 - H4 (#74) — `ranch triage` — rank assigned Jira tickets
 - H5 (#75) — `ranch scope <ticket>` — context bundle

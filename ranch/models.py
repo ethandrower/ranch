@@ -225,3 +225,19 @@ class Interjection(Base):
     processed_at  = Column(DateTime, nullable=True, index=True)
 
     run = relationship("Run", back_populates="interjections")
+
+
+class Dossier(Base):
+    """Agent self-report — structured snapshot of where the run is right now.
+
+    One row per `record_state` call. Latest-wins for the "current state" query
+    (`ORDER BY created_at DESC LIMIT 1`); older rows are retained so the timeline
+    view (Phase E3) can replay how the run evolved. See ROADMAP Phase H2.
+    """
+    __tablename__ = "dossiers"
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    run_id       = Column(Integer, ForeignKey("runs.id"), index=True)
+    state        = Column(String, index=True)         # denormalized for "show parked runs" filtering
+    payload_json = Column(Text)                       # full RecordStateInput as JSON
+    created_at   = Column(DateTime, default=utcnow, index=True)
