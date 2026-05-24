@@ -97,6 +97,32 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## Ranch hand daemon (Phase H11 — MVP)
+
+The persistent virtual engineer that runs the pilot loop on autopilot.
+Picks the next viable Jira ticket, gathers context, drafts a plan, parks
+for your review.
+
+```bash
+ranch hand start max --poll 30 --project ECD    # foreground daemon for agent 'max'
+ranch hand status                               # see what every hand is doing
+ranch hand stop max                             # graceful stop after the current step
+```
+
+MVP scope: one ticket at a time per hand. The hand triages → scopes →
+proposes → parks. While a recently-parked proposal is awaiting your
+review (24h window), the hand idles instead of piling on new work.
+
+After you review a parked proposal:
+- If you want to proceed, run `ranch run max --ticket <key> --brief "<plan>"`
+  using the plan from the dossier — execution wiring lands when the next
+  H-tickets layer in (H8 self-judge, H9 labs handoff, H10 PR draft).
+- If you want to reject, just delete or supersede the parked run; the
+  hand will triage past it once it falls outside the 24h window.
+
+Stop semantics: `ranch hand stop` writes a sentinel file the daemon polls
+for between cycles — clean exit, never kills mid-tool-use.
+
 ## Propose a plan (Phase H6)
 
 Run a bounded, file-system-read-only SDK session that produces a plan +

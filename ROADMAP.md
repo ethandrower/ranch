@@ -455,7 +455,8 @@ When the console proves out, these become real concerns. Not before.
         ├─ A3 (project registry) + A7 (dispatch UI)  ← when 2nd project arrives
         ├─ B1..B4 (project config externalization)  ← when 5th agent / 2nd project arrives
         ├─ C1..C4 (docker orchestration)  ← when make-context-switching becomes annoying
-        ├─ D1..D4 (autonomous mode)  ← after MVP ergonomics dial in
+        ├─ H11 (ranch hand MVP)  ← landed: triage → scope → propose → park
+    ├─ D1..D4 (autonomous mode)  ← after MVP ergonomics dial in
         ├─ E1..E4 (inbox + timeline)  ← needs A2 (event bus)
         └─ F1..F3 (memory panel)  ← opportunistic
 ```

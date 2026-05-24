@@ -613,6 +613,90 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.group("hand")
+def hand_group():
+    """Ranch hand — virtual engineer daemon (Phase H11)."""
+
+
+@hand_group.command("start")
+@click.argument("name")
+@click.option("--poll", default=30.0, type=float, help="Poll interval in seconds (default 30).")
+@click.option("--project", default=None, help="Restrict triage to a single Jira project key.")
+def hand_start_cmd(name, poll, project):
+    """Start the ranch hand daemon for an agent. Runs in the foreground."""
+    import asyncio as _asyncio
+    from .config import AGENTS, reload_agents
+    from .hand import RanchHand, _read_pid, _pid_alive
+
+    reload_agents()
+    if name not in AGENTS:
+        console.print(f"[red]Unknown agent '{name}'. Configure it in ~/.ranch/config.toml.[/red]")
+        raise click.Abort()
+
+    existing_pid = _read_pid(name)
+    if existing_pid and _pid_alive(existing_pid):
+        console.print(f"[red]Ranch hand '{name}' is already running (pid {existing_pid}).[/red]")
+        raise click.Abort()
+
+    hand = RanchHand(
+        name=name,
+        cwd=AGENTS[name].worktree,
+        poll_seconds=poll,
+        jira_project=project,
+    )
+    try:
+        _asyncio.run(hand.run())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+
+
+@hand_group.command("stop")
+@click.argument("name")
+def hand_stop_cmd(name):
+    """Request a graceful stop of the ranch hand daemon."""
+    from .hand import request_stop
+    if request_stop(name):
+        console.print(f"[green]Stop signal sent to ranch hand '{name}'.[/green]")
+    else:
+        console.print(f"[yellow]Ranch hand '{name}' is not running.[/yellow]")
+
+
+@hand_group.command("status")
+@click.option("--name", default=None, help="Show status for one hand only.")
+def hand_status_cmd(name):
+    """Show what each ranch hand is doing."""
+    from .hand import get_hand_status, list_all_hand_statuses
+    if name:
+        statuses = [get_hand_status(name)]
+    else:
+        statuses = list_all_hand_statuses()
+
+    if not statuses:
+        console.print("[yellow]No hands configured.[/yellow]")
+        return
+
+    table = Table(title="Ranch hands", show_header=True)
+    table.add_column("Hand")
+    table.add_column("State")
+    table.add_column("PID", width=8)
+    table.add_column("Run", width=8)
+    table.add_column("Ticket")
+    table.add_column("Dossier")
+    table.add_column("Detail")
+    state_styles = {"running": "green", "stopped": "dim", "missing": "red", "idle": "yellow"}
+    for s in statuses:
+        table.add_row(
+            s.name,
+            f"[{state_styles.get(s.state, 'white')}]{s.state}[/{state_styles.get(s.state, 'white')}]",
+            str(s.pid) if s.pid else "—",
+            f"#{s.current_run_id}" if s.current_run_id else "—",
+            s.current_ticket or "—",
+            s.current_dossier_state or "—",
+            s.detail,
+        )
+    console.print(table)
+
+
 @cli.command("propose")
 @click.argument("ticket", type=str)
 @click.option("--agent", default=None, help="Agent whose worktree to run in. Required if --cwd isn't given.")
