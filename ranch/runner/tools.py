@@ -89,6 +89,15 @@ STATE_INPUT_SCHEMA = {
             "type": "string",
             "description": "Ticket identifier (e.g. ECD-1234), if known.",
         },
+        "details": {
+            "type": "string",
+            "description": (
+                "Optional long-form narrative for this step — what you attempted, "
+                "results, decisions, issues, conclusions. This is what the operator "
+                "reads when they expand this stage in the UI. Use when the step is "
+                "non-trivial; omit for routine transitions."
+            ),
+        },
     },
     "required": ["plan", "just_did", "state"],
 }

@@ -549,6 +549,20 @@ def _render_dossier_panel(run: dict, payload: dict | None):
         listing = ", ".join(files[:8]) + ("..." if len(files) > 8 else "")
         body.append(f"\nFiles touched ({len(files)}): {listing}\n", style="dim")
 
+    details = payload.get("details")
+    if details:
+        # Compact preview — the UI's expand view will show the full thing.
+        # Show first ~3 lines or 240 chars, whichever is smaller, so the CLI
+        # panel stays usable when scanning many runs at once.
+        lines = details.strip().splitlines()
+        preview = "\n".join(lines[:3])
+        if len(preview) > 240:
+            preview = preview[:237] + "..."
+        elif len(lines) > 3:
+            preview += "\n..."
+        body.append("\nDetails:\n", style="bold")
+        body.append(f"{preview}\n", style="dim")
+
     return Panel(body, title=title, border_style=state_color)
 
 
