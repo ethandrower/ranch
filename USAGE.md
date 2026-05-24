@@ -97,6 +97,26 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## Scope a ticket (Phase H5)
+
+Build a pre-flight context bundle for a ticket — epic, sister tickets, open PRs, design links, Confluence refs. The ranch hand calls this before planning so the agent starts with the full picture instead of discovering it tool-call by tool-call.
+
+```bash
+ranch scope ECD-1234                 # print bundle to stdout (markdown)
+ranch scope ECD-1234 --save          # also persist to ~/.ranch/scopes/ECD-1234.md
+ranch scope ECD-1234 --json          # JSON for the ranch hand scheduler
+ranch scope ECD-1234 --cwd /path/to/worktree  # use a specific repo for `bb pr list`
+```
+
+The bundle includes:
+- Ticket itself: status, priority, assignee, labels, full description
+- Parent epic (if any), plus all sister tickets in the same epic
+- Open Bitbucket PRs whose branch or title references this ticket, any sister, or the epic
+- All figma.com URLs found in the ticket or epic
+- All Confluence wiki URLs found in the ticket or epic
+
+PR discovery is best-effort via `bb` — if `bb` is missing or auth fails, that section is empty rather than aborting the bundle.
+
 ## Triage assigned Jira tickets (Phase H4)
 
 Rank your assigned Jira tickets by viability (status, design presence, AC clarity, priority, age) so the ranch hand (or you) can pick what to work on next.

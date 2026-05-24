@@ -599,6 +599,42 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.command("scope")
+@click.argument("ticket_key", type=str)
+@click.option("--save", is_flag=True, help="Persist the bundle to ~/.ranch/scopes/<key>.md for downstream consumption by `ranch propose` / `ranch run`.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of markdown (for the ranch hand scheduler).")
+@click.option("--cwd", default=None, type=click.Path(exists=True, file_okay=False, resolve_path=True), help="Worktree to use for `bb pr list` discovery. Default: current directory.")
+def scope_cmd(ticket_key, save, as_json, cwd):
+    """Build a context bundle (epic + sisters + PRs + design links) for a ticket."""
+    import json as _json
+    from pathlib import Path as _Path
+    from .scope import build_scope, render_scope_markdown, save_scope
+    from .triage import JiraClient, JiraConfig, JiraConfigError
+
+    try:
+        cfg = JiraConfig.load()
+    except JiraConfigError as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    work_cwd = _Path(cwd) if cwd else _Path.cwd()
+    try:
+        with JiraClient(cfg) as client:
+            scope = build_scope(ticket_key, jira=client, cwd=work_cwd)
+    except Exception as e:
+        console.print(f"[red]Failed to build scope:[/red] {e}")
+        raise click.Abort()
+
+    if as_json:
+        click.echo(_json.dumps(scope.to_dict(), indent=2))
+    else:
+        click.echo(render_scope_markdown(scope))
+
+    if save:
+        path = save_scope(scope)
+        console.print(f"[dim]Saved → {path}[/dim]")
+
+
 @cli.command("triage")
 @click.option("--agent", default=None, help="Exclude tickets already in flight for this agent (default: anyone).")
 @click.option("--project", default=None, help="Filter to a single Jira project key (e.g. ECD).")
