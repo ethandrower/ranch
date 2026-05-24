@@ -222,3 +222,21 @@ def test_dossier_option_requires_both_fields():
     DossierOption(label="approve", description="Go ahead.")
     with pytest.raises(ValidationError):
         DossierOption(label="approve")  # missing description
+
+
+def test_record_state_details_optional():
+    """`details` is the long-form expand content — omitted for routine steps."""
+    payload = RecordStateInput.model_validate(_minimal_state())
+    assert payload.details is None
+
+
+def test_record_state_details_accepts_multiline():
+    """Non-trivial steps should populate `details` with the full narrative."""
+    long_details = (
+        "Tried approach A first — checked existing patterns in foo.py.\n"
+        "Hit an edge case where the cache wasn't being invalidated.\n"
+        "Decided to switch to approach B which sidesteps the cache entirely.\n"
+        "Result: cleaner diff, no perf regression."
+    )
+    payload = RecordStateInput.model_validate(_minimal_state(details=long_details))
+    assert payload.details == long_details

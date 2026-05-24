@@ -60,7 +60,15 @@ Call `record_state` at these moments, at minimum:
 You may also call it whenever your understanding shifts materially (new
 blocker discovered, scope change).
 
-`just_did` is one or two sentences in plain English, not raw tool calls.
+`just_did` is one or two sentences in plain English, not raw tool calls —
+this is what shows in the collapsed view.
+
+For non-trivial steps, ALSO populate `details` with a multi-paragraph
+narrative — what you attempted, the results you saw, decisions you made
+and why, any issues encountered, your conclusion. This is what the
+operator reads when they expand this stage in the UI. Skip `details`
+for routine transitions; use it whenever you had to think.
+
 Don't update on every tool use — once per meaningful phase transition is
 the right cadence. Aim for at least one `record_state` call for every 5-10
 other tool calls.
@@ -121,8 +129,15 @@ Call `record_state` at these moments, at minimum:
 5. **Before stopping**, even if successful — final `record_state` with all
    plan steps `done` and a closing `just_did` summary
 
-`just_did` is one or two sentences in plain English. Aim for at least one
-`record_state` call for every 5-10 other tool calls.
+`just_did` is one or two sentences in plain English — this is what shows
+in the collapsed view.
+
+For non-trivial steps, ALSO populate `details` with a multi-paragraph
+narrative — what you attempted, results, decisions made, issues
+encountered, conclusion. This is what the operator reads when they
+expand this stage in the UI. Skip `details` for routine transitions.
+
+Aim for at least one `record_state` call for every 5-10 other tool calls.
 
 ## Other rules
 

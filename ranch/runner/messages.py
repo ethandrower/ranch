@@ -67,6 +67,11 @@ class RecordStateInput(BaseModel):
     The dossier is the agent's structured self-report of where it is right now.
     The console renders it as the primary view of the run (replacing the need
     to scroll the transcript). See ROADMAP Phase H1.
+
+    `just_did` is the always-required one-liner shown in the collapsed view.
+    `details` is the optional long-form expand-on-click narrative for the UI's
+    Confluence-style stage entries (see #72) — what was attempted, results,
+    decisions, issues, conclusions. Recommended when the step is non-trivial.
     """
 
     plan: list[PlanStep]
@@ -76,6 +81,7 @@ class RecordStateInput(BaseModel):
     options: Optional[list[DossierOption]] = None
     files_touched: list[str] = []
     ticket: Optional[str] = None
+    details: Optional[str] = None
 
     @field_validator("just_did")
     @classmethod
