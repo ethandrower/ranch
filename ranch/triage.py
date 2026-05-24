@@ -308,25 +308,47 @@ class JiraClient:
     def __exit__(self, *args) -> None:
         self.close()
 
+    # Jira Cloud's /rest/api/3/search returns issues with a configurable
+    # field projection. We use one canonical projection across all queries so
+    # _normalize_ticket has consistent input shape.
+    _FIELDS = "summary,status,priority,created,updated,description,comment,labels,assignee,parent"
+
     def list_assigned_to_me(self, *, project: str | None = None) -> list[JiraTicket]:
         """Return all open tickets currently assigned to the authenticated user."""
         jql_parts = ["assignee = currentUser()", "statusCategory != Done"]
         if project:
             jql_parts.append(f"project = {project}")
         jql = " AND ".join(jql_parts) + " ORDER BY priority DESC, updated DESC"
+        return self._search(jql)
 
-        # Jira Cloud's /rest/api/3/search/jql is the documented endpoint.
-        # We pull a generous set of fields so scoring is fully informed without
-        # follow-up calls.
-        params = {
-            "jql": jql,
-            "fields": "summary,status,priority,created,updated,description,comment,labels,assignee",
-            "maxResults": 100,
-        }
+    def get_ticket(self, key: str) -> tuple[JiraTicket, str | None]:
+        """Fetch one ticket. Returns (ticket, parent_epic_key) — parent_epic_key
+        is None if this ticket isn't under an epic.
+
+        Used by `ranch scope <ticket>` to build the context bundle (H5).
+        """
+        resp = self._client.get(f"/rest/api/3/issue/{key}", params={"fields": self._FIELDS})
+        resp.raise_for_status()
+        issue = resp.json()
+        ticket = _normalize_ticket(issue)
+        parent = (issue.get("fields") or {}).get("parent")
+        parent_key = parent.get("key") if parent else None
+        return ticket, parent_key
+
+    def list_sisters(self, epic_key: str) -> list[JiraTicket]:
+        """All tickets under the given epic, including any in Done state.
+
+        Used by `ranch scope` so the agent can see what else has shipped or
+        is in flight for this epic.
+        """
+        jql = f'parent = {epic_key} ORDER BY status ASC, updated DESC'
+        return self._search(jql)
+
+    def _search(self, jql: str) -> list[JiraTicket]:
+        params = {"jql": jql, "fields": self._FIELDS, "maxResults": 100}
         resp = self._client.get("/rest/api/3/search", params=params)
         resp.raise_for_status()
-        data = resp.json()
-        return [_normalize_ticket(issue) for issue in data.get("issues", [])]
+        return [_normalize_ticket(issue) for issue in (resp.json() or {}).get("issues", [])]
 
 
 # ─── In-flight detection (from ranch's own DB) ─────────────────────
