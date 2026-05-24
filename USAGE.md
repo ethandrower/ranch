@@ -97,6 +97,39 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## Triage assigned Jira tickets (Phase H4)
+
+Rank your assigned Jira tickets by viability (status, design presence, AC clarity, priority, age) so the ranch hand (or you) can pick what to work on next.
+
+```bash
+ranch triage                         # top 10 viable tickets across all projects
+ranch triage --project ECD           # filter to one Jira project
+ranch triage --agent max --top 5     # exclude tickets max is already in flight on
+ranch triage --json                  # machine-readable, consumed by the ranch hand scheduler
+```
+
+One-time setup in `~/.ranch/config.toml`:
+
+```toml
+[jira]
+url = "https://yourorg.atlassian.net"
+email = "you@example.com"
+```
+
+Then export your API token (create at https://id.atlassian.com/manage-profile/security/api-tokens):
+
+```bash
+export RANCH_JIRA_API_TOKEN="…"
+```
+
+Scoring axes (higher is more viable):
+- **Status**: +30 in-progress, +20 to-do, 0 if blocked / waiting-for-design / on-hold
+- **Design link**: +20 if a figma.com URL is in the description or comments
+- **AC clarity**: +15 if "Acceptance Criteria" header or numbered should/must items
+- **Priority**: Highest +15, High +10, Medium +5, Low 0, Lowest -5
+- **Age**: log-bounded, max +10 (older tickets get a small boost so nothing rots)
+- **In-flight penalty**: -1000 (excluded) if this agent already has a non-terminal run on the ticket
+
 ## Dossier view (agent self-report — Phase H)
 
 While a run is happening, the agent emits structured dossier updates
