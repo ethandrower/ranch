@@ -369,6 +369,39 @@ The existing memory/lessons system becomes a console feature, not a separate CLI
 
 ---
 
+## Phase H — Pilot loop (self-driving fleet)
+
+> **Tracked in epic #70** (sub-issues #71–#81). H1 in flight.
+
+The leap past "autonomous execution given a brief" to "agents that pull their own work and only interrupt me when they need to." Each agent runs a continuous loop: find work → triage → scope → plan → resolve design → develop → self-judge → local-verify → labs-deploy → PR. Humans get pulled in only at calibrated decision points.
+
+The unlocking primitive is the **dossier** — a structured agent self-report (current plan, what was just done, current phase, blocker if parked, options if waiting on a decision). The console renders the dossier per agent instead of forcing the operator to scroll the transcript. Combined with **interactive takeover** (pause SDK run → `claude --resume` in the same session → hand back to orchestrator) and **lossless parking** (sdk_session_id + dossier preserve full state), this inverts the operator role: instead of driving four sessions, you triage attention across four agents.
+
+The "polling now, webhooks later" call: each agent's pilot daemon polls every ~30s for unblocked parked work or new triage candidates. Webhooks (Jira/Slack/BB) are deferred until the polling loop proves out.
+
+### Issues
+
+- H1 (#71) — Dossier schema + `record_state` MCP tool [in flight]
+- H2 (#72) — Dossier persistence + console rendering
+- H3 (#73) — Interactive takeover (pause → `claude --resume` → orchestrated resume)
+- H4 (#74) — `ranch triage` — rank assigned Jira tickets
+- H5 (#75) — `ranch scope <ticket>` — context bundle
+- H6 (#76) — `ranch propose <ticket>` — bounded plan + acceptance criteria
+- H7 (#77) — `ranch design <ticket>` — figma frame discovery
+- H8 (#78) — Self-judge integration loop
+- H9 (#79) — Ethan-labs deploy handoff
+- H10 (#80) — PR draft with testing instructions + labs link + Qase MCP
+- H11 (#81) — Agent scheduler — proactive multi-ticket loop
+
+### Open design questions
+
+- Confidence policy per stage per agent (which stages auto-proceed)
+- Viability scoring weights for triage
+- Figma discovery confidence thresholds for auto-pick
+- Multi-worktree-per-agent semantics (today 1:1; pilot scheduler may need to revisit)
+
+---
+
 ## Phase G — Production hardening (deferred)
 
 When the console proves out, these become real concerns. Not before.

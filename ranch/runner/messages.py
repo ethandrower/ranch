@@ -35,6 +35,56 @@ class DecisionLogInput(BaseModel):
     rationale: str
 
 
+# ─── Dossier: structured agent self-report (Phase H1) ────────────────────────
+
+
+DossierState = Literal[
+    "researching",
+    "planning",
+    "coding",
+    "testing",
+    "judging",
+    "parked",
+]
+
+
+class PlanStep(BaseModel):
+    step: str
+    status: Literal["pending", "in_progress", "done"]
+    notes: Optional[str] = None
+
+
+class DossierOption(BaseModel):
+    """One choice surfaced to the human when the agent parks needing a decision."""
+
+    label: str
+    description: str
+
+
+class RecordStateInput(BaseModel):
+    """Payload the agent sends when calling mcp__ranch__record_state.
+
+    The dossier is the agent's structured self-report of where it is right now.
+    The console renders it as the primary view of the run (replacing the need
+    to scroll the transcript). See ROADMAP Phase H1.
+    """
+
+    plan: list[PlanStep]
+    just_did: str
+    state: DossierState
+    blocker: Optional[str] = None
+    options: Optional[list[DossierOption]] = None
+    files_touched: list[str] = []
+    ticket: Optional[str] = None
+
+    @field_validator("just_did")
+    @classmethod
+    def just_did_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("just_did must not be empty")
+        return v
+
+
 # ─── Outbound: ranch → agent ──────────────────────────────────────────────────
 
 

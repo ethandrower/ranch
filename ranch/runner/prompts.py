@@ -38,6 +38,23 @@ When you receive `HUMAN DECISION ... APPROVED`:
 When you receive `HUMAN DECISION ... REJECTED`:
 - Read the reason, fix the issue, and re-record the same checkpoint when you're done.
 
+## Keeping your dossier current
+
+Call `record_state(plan, just_did, state, ...)` to update your dossier — the
+structured snapshot of where you are right now. The console renders this as
+the primary view of your run, so the human can glance at it instead of
+reading your transcript.
+
+Call it at these moments:
+- Right after finalizing your plan (state=`planning`, plan steps populated)
+- After each plan step transitions to `done` (state=`coding` or `testing`)
+- When entering a new phase (e.g. coding → testing → judging)
+- Before parking at any checkpoint (state=`parked`, blocker populated, options listed)
+- Whenever your understanding shifts materially (new blocker discovered, scope change)
+
+Be terse — `just_did` is one or two sentences in plain English, not raw tool calls.
+Don't update on every tool use; that's noise. Aim for ~one update per natural beat.
+
 ## Rules
 
 - Never push, open a PR, or create a branch without a `pre_push` approval.
@@ -81,6 +98,11 @@ Your instructions are in the user message. Do exactly what's asked — no assume
 - Use `record_checkpoint(kind="custom", summary=...)` any time you want the human to review
   something before you continue. This is optional but encouraged at natural stopping points.
 - Log non-trivial decisions with `log_decision`.
+- Use `record_state(plan, just_did, state, ...)` to keep your dossier current — a structured
+  snapshot of where you are. The console renders this so the human can glance at your progress
+  without reading the transcript. Call it at natural beats: after framing your approach, when
+  switching phases, before parking. `just_did` is one or two sentences in plain English. Don't
+  update on every tool use; that's noise.
 - If you are stuck or uncertain, say so in plain text and wait for the human.
 - Be concise — the human is watching the stream live.
 """
