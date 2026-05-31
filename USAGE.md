@@ -166,11 +166,18 @@ proposes → parks. While a recently-parked proposal is awaiting your
 review (24h window), the hand idles instead of piling on new work.
 
 After you review a parked proposal:
-- If you want to proceed, run `ranch run max --ticket <key> --brief "<plan>"`
-  using the plan from the dossier — execution wiring lands when the next
-  H-tickets layer in (H8 self-judge, H9 labs handoff, H10 PR draft).
+- If you want to proceed, run `ranch approve <run_id>` — the hand
+  detects this on its next poll cycle and auto-fires the execute step
+  (plan_ready and tests_green checkpoints auto-approve since the plan
+  was already vetted; pre_push remains a real operator gate).
 - If you want to reject, just delete or supersede the parked run; the
   hand will triage past it once it falls outside the 24h window.
+
+When the execute step finishes (or hits its budget), it parks at
+`pre_push`. You review the diff via `ranch dossier <execute_run_id>`,
+then either `ranch approve <execute_run_id>` to push and `ranch pr open`,
+or `ranch reject <execute_run_id> "reason"` to send the agent back to
+fix.
 
 Stop semantics: `ranch hand stop` writes a sentinel file the daemon polls
 for between cycles — clean exit, never kills mid-tool-use.

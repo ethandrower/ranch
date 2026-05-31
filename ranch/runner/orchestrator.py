@@ -61,6 +61,7 @@ class Orchestrator:
         allowed_tools_override: list[str] | None = None,
         budget_seconds: float | None = None,
         append_system_prompt_override: str | None = None,
+        auto_approve_kinds: set[str] | None = None,
     ):
         self.agent = agent
         self.cwd = cwd
@@ -68,6 +69,11 @@ class Orchestrator:
         self.brief = brief
         self.free = free
         self.auto_approve = auto_approve
+        # Per-kind override: when set, ONLY these checkpoint kinds auto-approve.
+        # auto_approve=True is the "all kinds" shorthand. Lets the ranch hand
+        # auto-approve plan_ready (already vetted at propose) while leaving
+        # pre_push as a real human gate.
+        self.auto_approve_kinds = auto_approve_kinds
         self.allowed_tools_override = allowed_tools_override
         self.budget_seconds = budget_seconds
         self.append_system_prompt_override = append_system_prompt_override
@@ -102,12 +108,16 @@ class Orchestrator:
         console.print(summary)
         if kind in APPROVAL_REQUIRED:
             self._awaiting_approval = True
-            if self.auto_approve:
-                console.print("[dim](auto-approve mode — firing approval immediately)[/dim]")
+            # Auto-approve precedence: explicit per-kind list wins; else the
+            # blanket `auto_approve` flag covers all kinds.
+            kind_auto = self.auto_approve_kinds is not None and kind in self.auto_approve_kinds
+            blanket_auto = self.auto_approve_kinds is None and self.auto_approve
+            if kind_auto or blanket_auto:
+                console.print(f"[dim](auto-approve fired for {kind})[/dim]")
                 self._approval_result = "approved"
                 self._approval_ready.set()
             else:
-                console.print("[dim]Waiting for: !approve  |  !reject <reason>  |  !stop[/dim]")
+                console.print(f"[dim]Waiting for: !approve  |  !reject <reason>  |  !stop  (gate: {kind})[/dim]")
 
     def requires_approval(self, kind: str) -> bool:
         return kind in APPROVAL_REQUIRED

@@ -29,7 +29,7 @@ from rich.console import Console
 
 from .config import AGENTS, RANCH_HOME, reload_agents
 from .db import db_session
-from .models import Dossier, Run
+from .models import Dossier, Interjection, Run
 
 console = Console()
 
@@ -172,6 +172,140 @@ def _snapshot_run(run: "Run") -> _RunSnapshot:
     return _RunSnapshot(id=run.id, agent=run.agent, ticket=run.ticket, state=run.state)
 
 
+@dataclass
+class _ApprovedPropose:
+    """A parked propose run the operator has just approved — the hand's
+    trigger to fire the execute step."""
+
+    propose_run: _RunSnapshot
+    parked_payload: dict  # the latest dossier payload (plan, acceptance, details, ...)
+
+
+def _find_approved_parked_propose(agent: str) -> _ApprovedPropose | None:
+    """Look for a terminal-state run by this agent whose latest dossier is
+    `parked` AND has an unprocessed `approve` interjection. Consumes (marks
+    processed) the interjection in the same transaction so the same approval
+    can't fire execute twice.
+    """
+    cutoff = datetime.now(timezone.utc) - AWAITING_APPROVAL_WINDOW
+    with db_session() as db:
+        runs = (
+            db.query(Run)
+            .filter(Run.agent == agent)
+            .filter(Run.state.in_(TERMINAL_RUN_STATES))
+            .filter(Run.ended_at >= cutoff)
+            .order_by(Run.ended_at.desc())
+            .all()
+        )
+        for run in runs:
+            latest = (
+                db.query(Dossier)
+                .filter_by(run_id=run.id)
+                .order_by(Dossier.created_at.desc())
+                .first()
+            )
+            if not latest or latest.state != "parked":
+                continue
+            approve_row = (
+                db.query(Interjection)
+                .filter_by(run_id=run.id, kind="approve", processed_at=None)
+                .order_by(Interjection.id)
+                .first()
+            )
+            if not approve_row:
+                continue
+            approve_row.processed_at = datetime.now(timezone.utc)
+            try:
+                payload = json.loads(latest.payload_json)
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+            return _ApprovedPropose(
+                propose_run=_snapshot_run(run),
+                parked_payload=payload,
+            )
+    return None
+
+
+def _build_execute_brief(ticket: str | None, parked_payload: dict) -> str:
+    """Construct the brief for the execute run.
+
+    Carries forward the propose's Summary + Plan + acceptance contract so
+    the agent doesn't need to re-derive any of it. The acceptance is also
+    pre-seeded onto the new run's dossier (separate step), so the agent
+    can call `run_acceptance` with no args.
+    """
+    import textwrap
+    details = parked_payload.get("details", "") or ""
+    plan_steps = parked_payload.get("plan") or []
+    plan_md = "\n".join(f"{i}. {s.get('step', '')}" for i, s in enumerate(plan_steps, 1)) or "(no plan steps in propose)"
+
+    return textwrap.dedent(f"""\
+        Ticket: {ticket or '(no ticket)'}
+
+        This is the execute step. The proposal phase has been approved by the
+        operator — your job now is to implement the proposed plan, verify
+        with `run_acceptance`, and park at `pre_push` for final approval.
+
+        Workflow:
+        1. PLAN — read the plan below + any relevant code. Call
+           `record_checkpoint(kind="plan_ready", summary=...)` to acknowledge
+           your execution approach (this checkpoint auto-approves since the
+           plan was already vetted at propose).
+        2. DEVELOP (TDD) — write failing tests first, then implementation.
+        3. VERIFY — call `run_acceptance` (no args; your dossier carries the
+           acceptance contract from propose). Iterate until all checks pass.
+        4. PRE-PUSH — `record_checkpoint(kind="pre_push", summary=...)` and
+           STOP.
+
+        ── PROPOSED PLAN ──
+        {plan_md}
+
+        ── FULL PROPOSAL DETAILS ──
+        {details.strip() or '(no details captured)'}
+
+        Begin with the PLAN step.
+    """)
+
+
+def _create_execute_run(
+    *, agent: str, cwd: Path, ticket: str | None,
+    brief: str, parked_payload: dict,
+) -> int:
+    """Insert the execute Run + pre-seed its dossier with the carried-forward
+    acceptance. Returns the new run_id.
+
+    Pre-seeding the dossier means `run_acceptance` (H8) finds the contract
+    on its own without us having to inline the JSON in the brief.
+    """
+    with db_session() as db:
+        run = Run(
+            agent=agent,
+            ticket=ticket,
+            cwd=str(cwd),
+            initial_prompt=brief,
+            state="planning",
+            auto_approve=1,  # plan_ready was already approved at propose
+        )
+        db.add(run)
+        db.flush()
+        new_id = run.id
+
+        carried_payload = {
+            "plan": parked_payload.get("plan", []),
+            "just_did": "Execute step initiated by ranch hand after operator approval of the proposal.",
+            "state": "planning",
+            "acceptance": parked_payload.get("acceptance", []),
+            "details": parked_payload.get("details", ""),
+        }
+        db.add(Dossier(
+            run_id=new_id,
+            state="planning",
+            payload_json=json.dumps(carried_payload),
+        ))
+
+    return new_id
+
+
 # ─── The hand itself ───────────────────────────────────────────────
 
 
@@ -186,21 +320,25 @@ class RanchHand:
         poll_seconds: float = 30.0,
         idle_log_freq_minutes: float = 30.0,
         jira_project: str | None = None,
+        execute_budget_seconds: float = 600.0,
         triage_fn: Optional[Callable[[str | None], list[str]]] = None,
         scope_fn: Optional[Callable[[str], None]] = None,
         propose_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        execute_fn: Optional[Callable[[_ApprovedPropose], Awaitable[None]]] = None,
     ):
         self.name = name
         self.cwd = cwd
         self.poll_seconds = poll_seconds
         self.idle_log_freq_minutes = idle_log_freq_minutes
         self.jira_project = jira_project
+        self.execute_budget_seconds = execute_budget_seconds
 
         # Injection seams for tests + offline mode. Default impls hit Jira /
         # invoke H5+H6; the validation harness injects synthetic versions.
         self.triage_fn = triage_fn or self._default_triage
         self.scope_fn = scope_fn or self._default_scope
         self.propose_fn = propose_fn or self._default_propose
+        self.execute_fn = execute_fn or self._default_execute
 
         self.stop_requested = False
         self._last_idle_log = datetime.now(timezone.utc) - timedelta(days=1)
@@ -234,6 +372,36 @@ class RanchHand:
         with JiraClient(JiraConfig.load()) as client:
             scope = build_scope(ticket_key, jira=client, cwd=self.cwd)
         save_scope(scope)
+
+    async def _default_execute(self, approved: "_ApprovedPropose") -> None:
+        """Run the structured-workflow orchestrator against the approved plan.
+
+        Carries the propose dossier's plan + acceptance forward onto a brand-new
+        execute Run, so H8's `run_acceptance` finds the contract on its own.
+        """
+        from .runner.orchestrator import Orchestrator
+
+        brief = _build_execute_brief(approved.propose_run.ticket, approved.parked_payload)
+        new_run_id = _create_execute_run(
+            agent=self.name,
+            cwd=self.cwd,
+            ticket=approved.propose_run.ticket,
+            brief=brief,
+            parked_payload=approved.parked_payload,
+        )
+
+        orch = Orchestrator(
+            agent=self.name,
+            cwd=self.cwd,
+            ticket=approved.propose_run.ticket,
+            brief=brief,
+            free=False,                                    # structured workflow
+            auto_approve=False,                            # pre_push is a REAL human gate
+            auto_approve_kinds={"plan_ready", "tests_green"},  # already vetted at propose
+            budget_seconds=self.execute_budget_seconds,
+        )
+        orch.run_id = new_run_id  # piggyback on the pre-created run + pre-seeded dossier
+        await orch.run()
 
     async def _default_propose(self, ticket_key: str) -> None:
         """Run a propose session via H6 against this hand's worktree."""
@@ -303,7 +471,23 @@ class RanchHand:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                # 2. Recently parked & still within the operator-review window?
+                # 2. An approved parked propose? → fire execute (H11 v2).
+                #    Consumes the approve interjection in the same transaction
+                #    so the same approval cannot re-fire execute.
+                approved = _find_approved_parked_propose(self.name)
+                if approved:
+                    console.print(
+                        f"[bold green]{self.name}: approval received for "
+                        f"{approved.propose_run.ticket} — firing execute[/bold green]"
+                    )
+                    try:
+                        await self.execute_fn(approved)
+                    except Exception as e:
+                        console.print(f"[red]{self.name}: execute failed — {e}[/red]")
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
+                # 3. Recently parked & still within the operator-review window?
                 parked = _last_parked_run_for(self.name)
                 if parked:
                     self._maybe_log_idle(
