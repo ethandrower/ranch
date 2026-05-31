@@ -390,7 +390,7 @@ The "polling now, webhooks later" call: each agent's pilot daemon polls every ~3
 - H7 (#77) — `ranch design <ticket>` — figma frame discovery
 - H8 (#78) — Self-judge integration loop [v1 in flight: unit_test/script/http]
 - H9 (#79) — Ethan-labs deploy handoff
-- H10 (#80) — PR draft with testing instructions + labs link + Qase MCP
+- H10 (#80) — PR draft with testing instructions + labs link + Qase MCP [in flight: draft + open, no Qase yet]
 - H11 (#81) — Agent scheduler — proactive multi-ticket loop
 
 ### Open design questions
