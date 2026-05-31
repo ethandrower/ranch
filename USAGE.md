@@ -97,6 +97,25 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## Dossier view (agent self-report — Phase H)
+
+While a run is happening, the agent emits structured dossier updates
+(plan progress, what it just did, current phase, blocker if parked).
+View them live without scrolling the transcript:
+
+```bash
+ranch dossier 3                  # latest dossier for run #3
+ranch dossier 3 --watch          # repaint live as the agent emits updates
+ranch dossier 3 --json           # raw JSON for scripting
+
+ranch fleet                      # all active runs at a glance
+ranch fleet --watch              # live-refreshing fleet view
+ranch fleet --all                # include completed/stopped runs
+```
+
+`ranch dossier --watch` auto-exits when the run reaches a terminal state
+(completed / stopped / error). Ctrl-C exits early.
+
 ## Memory
 
 ```bash
