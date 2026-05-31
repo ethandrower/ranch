@@ -15,10 +15,11 @@ from ranch.db import db_session
 from ranch.models import Run, Checkpoint, Dossier, Interjection
 from ranch.runner.checkpoints import make_checkpoint_hook, APPROVAL_REQUIRED
 from ranch.runner.dossier import make_dossier_hook
+from ranch.runner.judge_hook import make_judge_hook
 from ranch.runner.messages import HumanDecision, HumanNote, RecordStateInput
 from ranch.runner.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_FREE, initial_user_prompt
 from ranch.runner.state import transition
-from ranch.runner.tools import ranch_mcp
+from ranch.runner.tools import ranch_mcp, reset_judge_budget
 
 console = Console()
 
@@ -43,7 +44,7 @@ def _detect_branch(cwd: Path) -> str | None:
 DEFAULT_ALLOWED_TOOLS = [
     "Read", "Write", "Edit", "Bash", "Grep", "Glob",
     "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
-    "mcp__ranch__record_state",
+    "mcp__ranch__record_state", "mcp__ranch__run_acceptance",
 ]
 
 
@@ -152,6 +153,9 @@ class Orchestrator:
                 run = db.query(Run).filter_by(id=self.run_id).one()
                 run.state = "planning"
 
+        # H8: every new run starts with a fresh judge budget
+        reset_judge_budget()
+
         console.print(f"[bold cyan]Ranch run #{self.run_id} — {self.agent} / {self.ticket or 'ad-hoc'}[/bold cyan]")
         console.print("[dim]Commands: !note <text>  !approve  !reject <reason>  !stop[/dim]")
         console.print()
@@ -172,7 +176,7 @@ class Orchestrator:
             append_system_prompt=effective_append,
             mcp_servers={"ranch": ranch_mcp},
             allowed_tools=effective_tools,
-            hooks={"PostToolUse": [make_checkpoint_hook(self), make_dossier_hook(self)]},
+            hooks={"PostToolUse": [make_checkpoint_hook(self), make_dossier_hook(self), make_judge_hook(self)]},
             permission_mode="acceptEdits",
         )
 
@@ -462,7 +466,7 @@ async def resume_run(run_id: int) -> None:
             "Read", "Write", "Edit", "Bash", "Grep", "Glob",
             "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
         ],
-        hooks={"PostToolUse": [make_checkpoint_hook(orch), make_dossier_hook(orch)]},
+        hooks={"PostToolUse": [make_checkpoint_hook(orch), make_dossier_hook(orch), make_judge_hook(orch)]},
         permission_mode="acceptEdits",
         resume=sdk_session_id,
     )

@@ -61,6 +61,36 @@ class DossierOption(BaseModel):
     description: str
 
 
+AcceptanceKind = Literal["unit_test", "script", "http"]
+
+
+class AcceptanceCheck(BaseModel):
+    """One machine-verifiable acceptance criterion for a ticket.
+
+    Produced by `ranch propose` and consumed by `run_acceptance` (H8). Each
+    check is independently runnable. Browser + figma_diff are deliberately
+    left out of v1 (need playwright + screenshot-diff infra); they layer on
+    later without schema break.
+    """
+
+    kind: AcceptanceKind
+    name: str  # human-readable label, e.g. "smoke test the /healthz endpoint"
+    # Per-kind payload — kept loose; the judge module enforces shape per kind.
+    cmd: Optional[str] = None  # unit_test + script
+    pass_pattern: Optional[str] = None  # unit_test + script: substring or regex that proves pass
+    url: Optional[str] = None  # http
+    expected_status: Optional[int] = None  # http
+    expected_body_contains: Optional[str] = None  # http
+    timeout_seconds: float = 60.0
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must not be empty")
+        return v
+
+
 class RecordStateInput(BaseModel):
     """Payload the agent sends when calling mcp__ranch__record_state.
 
@@ -82,6 +112,7 @@ class RecordStateInput(BaseModel):
     files_touched: list[str] = []
     ticket: Optional[str] = None
     details: Optional[str] = None
+    acceptance: Optional[list[AcceptanceCheck]] = None  # H8 — produced by propose, consumed by run_acceptance
 
     @field_validator("just_did")
     @classmethod

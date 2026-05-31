@@ -1,4 +1,6 @@
 """In-process MCP tools exposed to the agent during a run."""
+from pathlib import Path
+
 from claude_code_sdk import tool, create_sdk_mcp_server
 
 CHECKPOINT_INPUT_SCHEMA = {
@@ -98,6 +100,41 @@ STATE_INPUT_SCHEMA = {
                 "non-trivial; omit for routine transitions."
             ),
         },
+        "acceptance": {
+            "type": "array",
+            "description": (
+                "Machine-verifiable acceptance criteria for the ticket. Set during "
+                "`ranch propose` (H6); consumed by the `run_acceptance` tool during "
+                "execute (H8). Each check is independently runnable. Browser + "
+                "figma diff are NOT yet supported — use unit_test / script / http."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["unit_test", "script", "http"],
+                    },
+                    "name": {"type": "string"},
+                    "cmd": {
+                        "type": "string",
+                        "description": "Shell command for unit_test / script kinds.",
+                    },
+                    "pass_pattern": {
+                        "type": "string",
+                        "description": "Substring or regex in stdout that proves pass. Required for unit_test / script.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP endpoint to probe (http kind).",
+                    },
+                    "expected_status": {"type": "integer"},
+                    "expected_body_contains": {"type": "string"},
+                    "timeout_seconds": {"type": "number", "default": 60},
+                },
+                "required": ["kind", "name"],
+            },
+        },
     },
     "required": ["plan", "just_did", "state"],
 }
@@ -126,8 +163,104 @@ async def record_state(args: dict) -> dict:
     return {"content": [{"type": "text", "text": "Dossier updated."}]}
 
 
+# ─── H8: run_acceptance ────────────────────────────────────────────
+
+
+# Per-process budget guard — refuses past this many calls within a single
+# orchestrator session. Prevents the "agent stuck in an iterate-until-pass
+# loop" failure mode. Reset by `reset_judge_budget()` at session start.
+DEFAULT_JUDGE_BUDGET = 8
+_judge_call_count = 0
+
+
+def reset_judge_budget() -> None:
+    """Called by the orchestrator at the start of each run."""
+    global _judge_call_count
+    _judge_call_count = 0
+
+
+def _judge_budget_remaining() -> int:
+    return DEFAULT_JUDGE_BUDGET - _judge_call_count
+
+
+RUN_ACCEPTANCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "checks": {
+            "type": "array",
+            "description": (
+                "Inline acceptance checks to run. If omitted, the tool reads "
+                "the latest record_state's `acceptance` field (set during "
+                "ranch propose). Provide inline only when you want to verify "
+                "an ad-hoc check during development."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["unit_test", "script", "http"]},
+                    "name": {"type": "string"},
+                    "cmd": {"type": "string"},
+                    "pass_pattern": {"type": "string"},
+                    "url": {"type": "string"},
+                    "expected_status": {"type": "integer"},
+                    "expected_body_contains": {"type": "string"},
+                    "timeout_seconds": {"type": "number"},
+                },
+                "required": ["kind", "name"],
+            },
+        },
+        "cwd": {
+            "type": "string",
+            "description": "Override the working directory. Defaults to the run's worktree.",
+        },
+    },
+}
+
+
+@tool(
+    "run_acceptance",
+    (
+        "Run the ticket's acceptance checks (unit tests, scripts, HTTP probes) "
+        "and report pass/fail per check. Use this after you've made changes to "
+        "verify your work objectively before parking at pre_push. If a check "
+        "fails, the result includes its stdout/stderr — read it, fix the issue, "
+        "and call run_acceptance again. Budget: limited calls per session, so "
+        "don't burn calls on speculative runs."
+    ),
+    RUN_ACCEPTANCE_SCHEMA,
+)
+async def run_acceptance(args: dict) -> dict:
+    """Run the acceptance checks. The orchestrator's PostToolUse hook
+    actually executes them (it has access to the run's cwd + dossier);
+    the body here just records the budget tick and returns a placeholder
+    that the hook replaces via additionalContext."""
+    global _judge_call_count
+    _judge_call_count += 1
+    remaining = _judge_budget_remaining()
+    if remaining < 0:
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "JUDGE BUDGET EXHAUSTED. You've called run_acceptance too "
+                    "many times this session. Park at state=parked with "
+                    "blocker='stuck_judge_budget_exhausted' and let the operator "
+                    "review."
+                ),
+            }],
+        }
+    # The hook injects the real results as additionalContext; this echo is
+    # a sentinel the agent will see if the hook didn't fire (e.g., misconfig).
+    return {
+        "content": [{
+            "type": "text",
+            "text": f"(run_acceptance pending hook execution — call {_judge_call_count}/{DEFAULT_JUDGE_BUDGET})",
+        }],
+    }
+
+
 ranch_mcp = create_sdk_mcp_server(
     name="ranch",
     version="0.1.0",
-    tools=[record_checkpoint, log_decision, record_state],
+    tools=[record_checkpoint, log_decision, record_state, run_acceptance],
 )
