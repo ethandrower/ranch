@@ -97,6 +97,27 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## Self-judge integration loop (Phase H8)
+
+During an execute run, the agent verifies its own work via `run_acceptance` —
+an in-process MCP tool that runs the acceptance checks set by `ranch propose`.
+
+Three check kinds in v1: `unit_test`, `script`, `http`. Browser + figma-diff
+are v2 (need playwright + visual-diff infra).
+
+Acceptance flow:
+1. `ranch propose` writes a structured `acceptance` array into the parked
+   dossier (alongside `details`, `plan`, etc.)
+2. Execute run launches with the same dossier in scope
+3. Agent calls `run_acceptance` (no args) — hook reads the dossier's acceptance,
+   runs every check, returns structured pass/fail to the agent
+4. If anything failed, agent reads the output, fixes the issue, re-calls
+5. Budget guard: 8 calls per session by default; refuses past that with a
+   "park as stuck" instruction
+
+No new CLI command needed for v1 — the tool is invoked by the agent during
+its run, not by the operator directly.
+
 ## Ranch hand daemon (Phase H11 — MVP)
 
 The persistent virtual engineer that runs the pilot loop on autopilot.

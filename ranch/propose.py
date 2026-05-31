@@ -60,13 +60,20 @@ landing on the final proposal. Your FINAL record_state call MUST have:
 - details = a multi-paragraph narrative containing:
     1. **Summary** — what you're going to build, in 2-3 sentences
     2. **Plan** — repeat the ordered steps with rationale per step
-    3. **Acceptance criteria** — structured checks, including:
-       - unit_tests: commands and expected pass patterns
-       - scripts: integration checks (curl/health endpoints/etc.)
-       - browser: if relevant, URLs + visual assertions
-       - figma_diff: if a design link is in the scope, the target frame
+    3. **Acceptance criteria** — human-readable description of what will prove it works
     4. **Complexity** — S/M/L with one-sentence rationale
     5. **Risks / open questions** — anything the operator should know
+- acceptance = STRUCTURED machine-runnable checks (an array). This is the
+  contract used by the `run_acceptance` tool during execute (H8). Each item:
+    - kind = "unit_test" | "script" | "http"
+    - name = short label
+    - For unit_test / script: cmd (shell command) + pass_pattern (substring or
+      regex in stdout that proves pass)
+    - For http: url + expected_status (default 200) + optional expected_body_contains
+  Aim for 2-5 checks. They must be RUNNABLE from the worktree root. Do NOT
+  invent commands; only use what genuinely exists (e.g. pytest if there's a
+  tests/ dir, curl for endpoints the ticket adds, etc.). If a kind isn't
+  applicable, simply omit it — don't pad.
 
 Plain markdown is fine — the operator reads `details` in the Confluence-expand
 view of the dossier.
