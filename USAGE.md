@@ -97,6 +97,37 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## PR draft + open (Phase H10)
+
+After a run finishes (whether human-driven or hand-driven), turn the
+accumulated dossier + diff + acceptance into a real PR with a structured
+body. No remote calls needed for the preview path.
+
+```bash
+ranch pr draft <run_id>                  # render the PR title + body to stdout
+ranch pr draft <run_id> --out /tmp/x.md  # write to a file instead
+ranch pr draft <run_id> --figma https://figma.com/file/X --jira-base https://citemed.atlassian.net
+                                         # decorate with Jira + design links
+
+ranch pr open <run_id>                   # actually fire `bb pr create --draft` (or gh)
+ranch pr open <run_id> --ready           # not a draft — ready for review immediately
+ranch pr open <run_id> --base-branch develop
+ranch pr open <run_id> --yes             # skip the confirmation prompt
+```
+
+The body is assembled from:
+- Dossier `details` — Summary, Manual verification (from "Acceptance
+  criteria" prose), Risks / open questions
+- Dossier `plan` — checklist of steps with done/in_progress/pending marks
+- Dossier `acceptance` — machine-runnable check list (the H8 contract)
+- `git diff --stat origin/develop...HEAD` (falls back to develop / main)
+  — authoritative Changes section
+- `Run.branch_name` + `Run.agent` — footer attribution
+- Optional Jira + Figma URLs you pass at draft time
+
+Platform backend (`bb` vs `gh`) is auto-detected from the worktree;
+override with `--platform`.
+
 ## Self-judge integration loop (Phase H8)
 
 During an execute run, the agent verifies its own work via `run_acceptance` —

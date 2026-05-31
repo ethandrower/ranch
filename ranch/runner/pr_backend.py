@@ -118,6 +118,29 @@ class BBBackend:
             argv += ["--reply-to", str(reply_to)]
         _run(argv, cwd)
 
+    def create_pr(self, title: str, body: str, cwd: Path, draft: bool = True,
+                  base_branch: str | None = None) -> tuple[str, str]:
+        """Open a new PR. Returns (pr_id, url). Defaults to draft.
+
+        H10: used by `ranch pr open <run_id>` to finalize a finished run.
+        """
+        argv = ["bb", "--json", "pr", "create", "-t", title, "-b", body]
+        if draft:
+            argv.append("--draft")
+        if base_branch:
+            argv += ["-d", base_branch]
+        raw = _run(argv, cwd, timeout=60.0)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise PRBackendError(f"bb pr create returned non-JSON: {e}\nstdout: {raw[:500]}") from e
+        pr_id = str(data.get("id"))
+        url = (
+            data.get("links", {}).get("html", {}).get("href")
+            or data.get("url", "")
+        )
+        return pr_id, url
+
 
 # ─── GitHub (gh) ──────────────────────────────────────────────────
 
@@ -193,6 +216,30 @@ class GHBackend:
         if reply_to:
             body = f"(reply to comment {reply_to})\n\n{body}"
         _run(["gh", "pr", "comment", pr_id, "--body", body], cwd)
+
+    def create_pr(self, title: str, body: str, cwd: Path, draft: bool = True,
+                  base_branch: str | None = None) -> tuple[str, str]:
+        """Open a new PR. Returns (pr_id, url). Defaults to draft.
+
+        gh prints the PR URL to stdout on success. We re-query via
+        `gh pr view --json` to recover the numeric ID since `gh pr create`
+        doesn't emit JSON.
+        """
+        argv = ["gh", "pr", "create", "--title", title, "--body", body]
+        if draft:
+            argv.append("--draft")
+        if base_branch:
+            argv += ["--base", base_branch]
+        url = _run(argv, cwd, timeout=60.0).strip().splitlines()[-1].strip()
+        # Recover the numeric ID
+        try:
+            raw = _run(["gh", "pr", "view", url, "--json", "number,url"], cwd)
+            data = json.loads(raw)
+            pr_id = str(data.get("number"))
+            url = data.get("url", url)
+        except PRBackendError:
+            pr_id = url.rsplit("/", 1)[-1]  # fallback — last path segment
+        return pr_id, url
 
 
 # ─── Dispatch ─────────────────────────────────────────────────────
