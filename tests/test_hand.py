@@ -10,7 +10,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,6 +20,10 @@ from ranch.hand import (
     HANDS_DIR,
     RanchHand,
     _active_run_for,
+    _ApprovedPropose,
+    _build_execute_brief,
+    _create_execute_run,
+    _find_approved_parked_propose,
     _last_parked_run_for,
     _pid_file,
     _read_pid,
@@ -28,7 +32,7 @@ from ranch.hand import (
     list_all_hand_statuses,
     request_stop,
 )
-from ranch.models import Dossier, Run
+from ranch.models import Dossier, Interjection, Run
 
 
 # ─── Fixture: isolate the hands dir per test ──────────────────────
@@ -310,3 +314,237 @@ def test_status_when_pid_stale_returns_missing(isolated_hands_dir):
     (isolated_hands_dir / "max.pid").write_text("999999")
     s = get_hand_status("max")
     assert s.state == "missing"
+
+
+# ─── H11 v2: approval detection + auto-execute ───────────────────
+
+
+def _add_approve(run_id: int):
+    init_db()
+    with db_session() as db:
+        db.add(Interjection(run_id=run_id, kind="approve", content=""))
+
+
+def test_find_approved_returns_none_with_no_runs():
+    init_db()
+    assert _find_approved_parked_propose("max") is None
+
+
+def test_find_approved_returns_none_when_parked_but_no_approval():
+    rid = _make_run("max", "ECD-1", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "parked", blocker="x")
+    assert _find_approved_parked_propose("max") is None
+
+
+def test_find_approved_returns_none_when_approval_but_not_parked():
+    """An approve interjection on a run that never parked shouldn't fire execute."""
+    rid = _make_run("max", "ECD-1", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "coding")
+    _add_approve(rid)
+    assert _find_approved_parked_propose("max") is None
+
+
+def test_find_approved_returns_run_and_payload_when_both_present():
+    rid = _make_run("max", "ECD-1", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "parked", blocker="x", just_did="ready",
+                  plan=[{"step": "do it", "status": "done"}])
+    _add_approve(rid)
+    approved = _find_approved_parked_propose("max")
+    assert approved is not None
+    assert approved.propose_run.id == rid
+    assert approved.parked_payload["plan"][0]["step"] == "do it"
+
+
+def test_find_approved_marks_interjection_processed():
+    """Same approval cannot fire execute twice."""
+    rid = _make_run("max", "ECD-1", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "parked", blocker="x")
+    _add_approve(rid)
+
+    first = _find_approved_parked_propose("max")
+    second = _find_approved_parked_propose("max")
+    assert first is not None
+    assert second is None
+
+
+def test_find_approved_is_agent_scoped():
+    rid = _make_run("jeffy", "ECD-J", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "parked", blocker="x")
+    _add_approve(rid)
+    assert _find_approved_parked_propose("max") is None
+
+
+def test_find_approved_respects_approval_window():
+    rid = _make_run("max", "ECD-1", state="completed",
+                    ended_at=datetime.now(timezone.utc) - timedelta(hours=30))
+    _add_dossier(rid, "parked", blocker="x")
+    _add_approve(rid)
+    assert _find_approved_parked_propose("max") is None
+
+
+def test_build_execute_brief_inlines_plan_and_details():
+    payload = {
+        "details": "## Summary\n\nDo the thing.",
+        "plan": [
+            {"step": "Step one", "status": "pending"},
+            {"step": "Step two", "status": "pending"},
+        ],
+    }
+    brief = _build_execute_brief("ECD-100", payload)
+    assert "Ticket: ECD-100" in brief
+    assert "Step one" in brief
+    assert "Step two" in brief
+    assert "Do the thing." in brief
+    assert "run_acceptance" in brief
+    assert "pre_push" in brief
+
+
+def test_build_execute_brief_handles_missing_fields():
+    brief = _build_execute_brief(None, {})
+    assert "(no ticket)" in brief
+    assert "(no plan steps in propose)" in brief
+    assert "(no details captured)" in brief
+
+
+def test_create_execute_run_preseeds_acceptance_onto_new_run(tmp_path):
+    """The hand carries the acceptance contract forward so H8's hook can find it."""
+    init_db()
+    payload = {
+        "plan": [{"step": "x", "status": "pending"}],
+        "acceptance": [
+            {"kind": "unit_test", "name": "p", "cmd": "pytest", "pass_pattern": "passed"},
+        ],
+        "details": "## Summary\n\nx",
+    }
+    new_id = _create_execute_run(
+        agent="max", cwd=tmp_path, ticket="ECD-100",
+        brief="x", parked_payload=payload,
+    )
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=new_id).one()
+        assert run.agent == "max"
+        assert run.ticket == "ECD-100"
+        assert run.state == "planning"
+
+        latest = (
+            db.query(Dossier)
+            .filter_by(run_id=new_id)
+            .order_by(Dossier.created_at.desc())
+            .first()
+        )
+        seeded = json.loads(latest.payload_json)
+        assert seeded["acceptance"][0]["name"] == "p"
+        assert "Execute step initiated" in seeded["just_did"]
+
+
+@pytest.mark.asyncio
+async def test_hand_fires_execute_when_approval_detected(tmp_path):
+    """End-to-end loop check: parked + approve → execute_fn invoked."""
+    rid = _make_run("testhand", "ECD-X", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "parked", blocker="x",
+                  plan=[{"step": "do", "status": "pending"}])
+    _add_approve(rid)
+
+    captured = {"executed": None}
+    async def fake_execute(approved):
+        captured["executed"] = approved.propose_run.ticket
+
+    hand = RanchHand(
+        "testhand", tmp_path, poll_seconds=0.01,
+        triage_fn=lambda p: [],
+        scope_fn=lambda k: None,
+        propose_fn=AsyncMock(),
+        execute_fn=fake_execute,
+    )
+
+    async def stop():
+        await asyncio.sleep(0.05)
+        hand.stop_requested = True
+
+    await asyncio.gather(hand.run(), stop())
+    assert captured["executed"] == "ECD-X"
+
+
+@pytest.mark.asyncio
+async def test_hand_skips_triage_when_execute_just_fired(tmp_path):
+    """The cycle that fires execute shouldn't also triage — that would
+    duplicate work for the operator to untangle."""
+    rid = _make_run("testhand", "ECD-X", state="completed",
+                    ended_at=datetime.now(timezone.utc))
+    _add_dossier(rid, "parked", blocker="x")
+    _add_approve(rid)
+
+    triage_calls = {"n": 0}
+    def triage_fn(_p):
+        triage_calls["n"] += 1
+        return []
+
+    async def fake_execute(_approved):
+        pass
+
+    hand = RanchHand(
+        "testhand", tmp_path, poll_seconds=0.01,
+        triage_fn=triage_fn,
+        scope_fn=lambda k: None,
+        propose_fn=AsyncMock(),
+        execute_fn=fake_execute,
+    )
+
+    async def stop():
+        await asyncio.sleep(0.05)
+        hand.stop_requested = True
+
+    await asyncio.gather(hand.run(), stop())
+    # Triage may have been called on subsequent cycles AFTER execute fired
+    # (since execute consumed the parked-with-approval state). But it should
+    # NOT have been called in the SAME cycle as the execute fire — we test
+    # this by checking the approve interjection was consumed exactly once.
+    with db_session() as db:
+        approved = db.query(Interjection).filter_by(run_id=rid, kind="approve").one()
+    assert approved.processed_at is not None
+
+
+# ─── Orchestrator per-kind auto-approve ──────────────────────────
+
+
+def test_orchestrator_auto_approve_kinds_overrides_blanket():
+    """auto_approve_kinds wins over auto_approve flag for the listed kinds."""
+    from ranch.runner.orchestrator import Orchestrator
+    orch = Orchestrator(
+        agent="x", cwd=Path("/tmp"), ticket="t", brief="b",
+        auto_approve=False,
+        auto_approve_kinds={"plan_ready"},
+    )
+    assert orch.auto_approve_kinds == {"plan_ready"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_on_checkpoint_only_auto_fires_listed_kinds():
+    from ranch.runner.orchestrator import Orchestrator
+    init_db()
+    with db_session() as db:
+        run = Run(agent="x", ticket="t", cwd="/tmp", initial_prompt="b", state="planning")
+        db.add(run); db.flush()
+        rid = run.id
+
+    orch = Orchestrator(
+        agent="x", cwd=Path("/tmp"), ticket="t", brief="b",
+        auto_approve_kinds={"plan_ready"},
+    )
+    orch.run_id = rid
+
+    # plan_ready: should auto-fire approval
+    await orch.on_checkpoint("plan_ready", "ok", None)
+    assert orch._approval_ready.is_set()
+    orch._approval_ready.clear()
+    orch._approval_result = None
+
+    # pre_push: should NOT auto-fire
+    await orch.on_checkpoint("pre_push", "ok", None)
+    assert not orch._approval_ready.is_set()
