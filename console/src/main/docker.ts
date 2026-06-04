@@ -29,7 +29,7 @@ const execFile = promisify(execFileCb);
 
 let cachedDockerPath: string | null | undefined;
 
-async function findDocker(): Promise<string | null> {
+export async function findDocker(): Promise<string | null> {
   if (cachedDockerPath !== undefined) return cachedDockerPath;
   for (const candidate of [
     '/opt/homebrew/bin/docker',
