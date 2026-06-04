@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerIpcHandlers } from './ipc.js';
 import { detachAllForWebContents } from './pty.js';
+import { unsubscribeAllForWebContents } from './logs.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -38,6 +39,7 @@ function createMainWindow(): BrowserWindow {
   // lives on independently — we just close the client.
   window.on('closed', () => {
     detachAllForWebContents(window.webContents);
+    unsubscribeAllForWebContents(window.webContents);
   });
 
   if (isDev) {

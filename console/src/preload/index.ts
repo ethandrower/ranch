@@ -64,6 +64,11 @@ const IPC_CHANNELS = {
   dockerSharedUp: 'ranch:docker:sharedUp',
   dockerSharedDown: 'ranch:docker:sharedDown',
   dockerSharedRestart: 'ranch:docker:sharedRestart',
+  logsDescribe: 'ranch:logs:describe',
+  logsSubscribe: 'ranch:logs:subscribe',
+  logsUnsubscribe: 'ranch:logs:unsubscribe',
+  logsLine: 'logs:line',
+  logsExit: 'logs:exit',
 } as const;
 
 /**
@@ -155,6 +160,42 @@ const api: RanchApi = {
     sharedUp: () => ipcRenderer.invoke(IPC_CHANNELS.dockerSharedUp),
     sharedDown: () => ipcRenderer.invoke(IPC_CHANNELS.dockerSharedDown),
     sharedRestart: () => ipcRenderer.invoke(IPC_CHANNELS.dockerSharedRestart),
+  },
+  logs: {
+    describe: (agent) => ipcRenderer.invoke(IPC_CHANNELS.logsDescribe, agent),
+    subscribe: async (args, onLine, onExit) => {
+      const result = await ipcRenderer.invoke(IPC_CHANNELS.logsSubscribe, args);
+      if (!result || !result.ok || !result.streamId) return result;
+
+      const sid = result.streamId as string;
+      const lineHandler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { streamId: string; line: string },
+      ) => {
+        if (payload?.streamId === sid) onLine(payload.line);
+      };
+      const exitHandler = (
+        _e: Electron.IpcRendererEvent,
+        payload: {
+          streamId: string;
+          exitCode: number | null;
+          signal: string | null;
+          expected: boolean;
+        },
+      ) => {
+        if (payload?.streamId !== sid) return;
+        if (onExit) onExit(payload);
+      };
+      ipcRenderer.on(IPC_CHANNELS.logsLine, lineHandler);
+      ipcRenderer.on(IPC_CHANNELS.logsExit, exitHandler);
+
+      const unsubscribe = () => {
+        ipcRenderer.off(IPC_CHANNELS.logsLine, lineHandler);
+        ipcRenderer.off(IPC_CHANNELS.logsExit, exitHandler);
+        void ipcRenderer.invoke(IPC_CHANNELS.logsUnsubscribe, sid);
+      };
+      return { ...result, unsubscribe };
+    },
   },
 };
 
