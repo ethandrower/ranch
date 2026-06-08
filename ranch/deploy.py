@@ -1,6 +1,11 @@
-"""H9 Phase 1 — labs deploy primitives.
+"""H9 Phase 1 — per-hand staging deploy primitives.
 
-Deploys an agent's run to its Dokku app (per the citemed
+Each ranch hand deploys to its OWN per-hand Dokku staging app — there
+is no shared "labs" catch-all in this model. dev-ethan at
+labs.staging.citemed.com is a notional 5th hand handled via the same
+per-agent config override mechanism, not a special target.
+
+Deploys an agent's run to its hand's Dokku app (per the citemed
 `infra/dokku/CHEATSHEET.md` conventions), polls the public URL until
 the app responds, and persists the URL + deployed_at timestamp on the
 Run row.
@@ -10,13 +15,19 @@ Conventions inherited verbatim from the cheatsheet:
     source branch (`git push <remote> <source>:main`).
   - The remote alias per hand is `dokku-<agent>`.
   - The app on the host is `dev-<agent>`.
-  - Public URL is `<agent>.staging.citemed.com` (dev-ethan's
-    `labs.staging.citemed.com` is special; not relevant to ranch hands).
+  - Public URL is `<agent>.staging.citemed.com`.
   - Health check: `curl -I` on root — 2xx OR 3xx counts as alive.
 
-Phase 1 (this module) ships the primitive. Phase 2 wires it into the
-hand's main loop so it auto-fires after pre_push approval. Phase 3
-extends the H10 PR draft body with the resulting `labs_url`.
+Auto-fire from the hand's poll loop is deliberately NOT part of this
+design: the staging box is memory-tight (4 hands * 1500MB + pre-prod +
+remington) and most ticket work doesn't actually need a deploy to
+validate. Deploys are operator-driven via `ranch deploy <run_id>`,
+with the agent putting a "deploy recommended"/"deploy not needed" hint
+on the pre_push parked dossier based on its acceptance contract shape.
+
+Phase 1 (this module): the deploy primitive + state inspection.
+Phase 2 (follow-up): the agent's recommendation field on the dossier.
+Phase 3 (follow-up): H10 PR draft body gets the deploy_url section.
 """
 from __future__ import annotations
 
@@ -39,7 +50,7 @@ from .models import Run
 
 
 @dataclass(frozen=True)
-class LabsConfig:
+class DeployConfig:
     """Resolved labs config for one agent — fleet defaults + per-agent overrides."""
 
     agent: str
@@ -51,7 +62,7 @@ class LabsConfig:
     deploy_timeout_seconds: int
 
 
-class LabsConfigError(RuntimeError):
+class DeployConfigError(RuntimeError):
     """Raised when the labs config can't be loaded or is incomplete."""
 
 
@@ -68,8 +79,8 @@ _DEFAULT_FLEET = {
 }
 
 
-def load_labs_config(agent: str) -> LabsConfig:
-    """Resolve LabsConfig for one agent. Raises LabsConfigError on misconfig."""
+def load_deploy_config(agent: str) -> DeployConfig:
+    """Resolve DeployConfig for one agent. Raises DeployConfigError on misconfig."""
     if not CONFIG_FILE.exists():
         # Use pure defaults — gives a working config in dev-from-scratch.
         return _from_templates(agent, _DEFAULT_FLEET)
@@ -94,13 +105,13 @@ def load_labs_config(agent: str) -> LabsConfig:
                 per_agent.get("deploy_timeout_seconds", rendered.deploy_timeout_seconds)
             ),
         }
-        return LabsConfig(**merged)
+        return DeployConfig(**merged)
 
     return _from_templates(agent, fleet)
 
 
-def _from_templates(agent: str, fleet: dict) -> LabsConfig:
-    return LabsConfig(
+def _from_templates(agent: str, fleet: dict) -> DeployConfig:
+    return DeployConfig(
         agent=agent,
         host=str(fleet["host"]),
         app=str(fleet["app_template"]).format(agent=agent),
@@ -126,7 +137,7 @@ class HealthResult:
 
 @dataclass
 class DeployResult:
-    """End-to-end deploy result returned by deploy_run_to_labs."""
+    """End-to-end deploy result returned by deploy_run."""
 
     ok: bool
     url: str | None = None
@@ -175,10 +186,70 @@ def ensure_dokku_remote(cwd: Path, remote: str, expected_url: str) -> tuple[bool
     return True, f"remote '{remote}' already configured"
 
 
+# ─── Pre-deploy state inspection ──────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CurrentDeployState:
+    """What's currently sitting on a hand's Dokku app (best-effort lookup)."""
+
+    deployed_sha: str | None  # SHA of `main` on the remote, if discoverable
+    local_head_sha: str | None  # SHA of the source branch HEAD locally
+    commits_ahead: int | None  # how many commits local is ahead by, if computable
+    error: str | None = None  # populated when introspection failed
+
+
+def inspect_current_deploy(
+    cwd: Path, remote: str, source_branch: str,
+) -> CurrentDeployState:
+    """Look up what's currently deployed on the remote vs what we'd push.
+
+    Operator-facing — surfaces "you are about to overwrite X" before the
+    push so we don't silently blow away yesterday's manual testing on the
+    same env. Best-effort: a failure to query just means we proceed
+    without the safety net, never blocks the deploy.
+    """
+    # 1. SHA on the remote's main
+    rc, out, err = _git(["ls-remote", remote, "main"], cwd, timeout=15.0)
+    deployed_sha: str | None = None
+    if rc == 0 and out.strip():
+        # Format: "<sha>\trefs/heads/main"
+        deployed_sha = out.split()[0]
+
+    # 2. Local HEAD of source branch
+    rc2, out2, _ = _git(["rev-parse", source_branch], cwd, timeout=10.0)
+    local_head_sha = out2.strip() if rc2 == 0 and out2.strip() else None
+
+    # 3. Commits between (only computable if BOTH SHAs are known AND the
+    # remote SHA is reachable from local history — usually true after a
+    # fetch, but not guaranteed)
+    commits_ahead: int | None = None
+    if deployed_sha and local_head_sha and deployed_sha != local_head_sha:
+        rc3, out3, _ = _git(
+            ["rev-list", "--count", f"{deployed_sha}..{local_head_sha}"],
+            cwd, timeout=10.0,
+        )
+        if rc3 == 0 and out3.strip().isdigit():
+            commits_ahead = int(out3.strip())
+
+    error: str | None = None
+    if deployed_sha is None:
+        # Soft warning, not a hard error — first deploy to a fresh app
+        # legitimately won't have a `main` ref yet.
+        error = f"could not read main from {remote}: {err.strip() or 'no output'}"
+
+    return CurrentDeployState(
+        deployed_sha=deployed_sha,
+        local_head_sha=local_head_sha,
+        commits_ahead=commits_ahead,
+        error=error,
+    )
+
+
 # ─── Deploy + health check ─────────────────────────────────────────
 
 
-def deploy_run_to_labs(
+def deploy_run(
     run_id: int,
     *,
     source_branch: Optional[str] = None,
@@ -190,11 +261,11 @@ def deploy_run_to_labs(
     """Deploy a run's branch to its agent's Dokku app, then health-check.
 
     Steps:
-      1. Load Run + resolve LabsConfig
+      1. Load Run + resolve DeployConfig
       2. Ensure the git remote exists with the right URL
       3. git push <remote> <source>:main  (Dokku always deploys main)
       4. Poll <url><health_path> via HEAD until 2xx/3xx OR timeout
-      5. On success: write labs_url + labs_deployed_at to Run row
+      5. On success: write deploy_url + deployed_at to Run row
 
     `source_branch` defaults to Run.branch_name. `force=True` adds --force
     to the push (fine on dev envs per the cheatsheet).
@@ -218,8 +289,8 @@ def deploy_run_to_labs(
                              elapsed_seconds=time.time() - started)
 
     try:
-        cfg = load_labs_config(agent)
-    except LabsConfigError as e:
+        cfg = load_deploy_config(agent)
+    except DeployConfigError as e:
         return DeployResult(ok=False, reason=str(e),
                              elapsed_seconds=time.time() - started)
 
@@ -257,8 +328,8 @@ def deploy_run_to_labs(
         now = datetime.now(timezone.utc)
         with db_session() as db:
             db.query(Run).filter_by(id=run_id).update({
-                "labs_url": cfg.url,
-                "labs_deployed_at": now,
+                "deploy_url": cfg.url,
+                "deployed_at": now,
             })
 
     return DeployResult(

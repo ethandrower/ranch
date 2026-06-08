@@ -1,10 +1,10 @@
-"""Tests for ranch/labs.py — H9 Phase 1.
+"""Tests for ranch/deploy.py — H9 Phase 1.
 
 Covers:
-  - load_labs_config: pure defaults, fleet override, per-agent override, mix
+  - load_deploy_config: pure defaults, fleet override, per-agent override, mix
   - ensure_dokku_remote: missing / matching / divergent
   - wait_for_health: 2xx / 3xx / 4xx / 5xx / connection error / timeout
-  - deploy_run_to_labs: missing run, no cwd, no branch, git push fail,
+  - deploy_run: missing run, no cwd, no branch, git push fail,
     health pass, health fail
   - CLI integration via CliRunner
 """
@@ -21,14 +21,15 @@ from click.testing import CliRunner
 
 from ranch.cli import cli
 from ranch.db import db_session, init_db
-from ranch.labs import (
+from ranch.deploy import (
     DeployResult,
     HealthResult,
-    LabsConfig,
+    DeployConfig,
     _from_templates,
-    deploy_run_to_labs,
+    deploy_run,
     ensure_dokku_remote,
-    load_labs_config,
+    inspect_current_deploy,
+    load_deploy_config,
     wait_for_health,
 )
 from ranch.models import Run
@@ -52,13 +53,13 @@ def _make_run(
         return run.id
 
 
-# ─── load_labs_config ────────────────────────────────────────────
+# ─── load_deploy_config ────────────────────────────────────────────
 
 
 def test_config_pure_defaults_when_no_file(tmp_path, monkeypatch):
     """No config.toml → pure citemed defaults."""
-    monkeypatch.setattr("ranch.labs.CONFIG_FILE", tmp_path / "nope.toml")
-    cfg = load_labs_config("max")
+    monkeypatch.setattr("ranch.deploy.CONFIG_FILE", tmp_path / "nope.toml")
+    cfg = load_deploy_config("max")
     assert cfg.agent == "max"
     assert cfg.host == "dokku@178.105.80.165"
     assert cfg.app == "dev-max"
@@ -76,8 +77,8 @@ def test_config_fleet_overrides_apply(tmp_path, monkeypatch):
         'app_template = "{agent}-app"\n'
         'remote_template = "x-{agent}"\n'
     )
-    monkeypatch.setattr("ranch.labs.CONFIG_FILE", cfg_path)
-    cfg = load_labs_config("jeffy")
+    monkeypatch.setattr("ranch.deploy.CONFIG_FILE", cfg_path)
+    cfg = load_deploy_config("jeffy")
     assert cfg.host == "dokku@example.com"
     assert cfg.app == "jeffy-app"
     assert cfg.remote == "x-jeffy"
@@ -95,8 +96,8 @@ def test_config_per_agent_overrides_win(tmp_path, monkeypatch):
         'url = "https://arnold-special.citemed.com"\n'
         'app = "dev-arnold-test"\n'
     )
-    monkeypatch.setattr("ranch.labs.CONFIG_FILE", cfg_path)
-    cfg = load_labs_config("arnold")
+    monkeypatch.setattr("ranch.deploy.CONFIG_FILE", cfg_path)
+    cfg = load_deploy_config("arnold")
     assert cfg.url == "https://arnold-special.citemed.com"
     assert cfg.app == "dev-arnold-test"
     # remote falls back to template
@@ -112,8 +113,8 @@ def test_config_per_agent_inherits_unspecified_values(tmp_path, monkeypatch):
         '[agents.max.dokku]\n'
         'app = "dev-max-override"\n'
     )
-    monkeypatch.setattr("ranch.labs.CONFIG_FILE", cfg_path)
-    cfg = load_labs_config("max")
+    monkeypatch.setattr("ranch.deploy.CONFIG_FILE", cfg_path)
+    cfg = load_deploy_config("max")
     assert cfg.health_path == "/healthz"  # inherited
     assert cfg.app == "dev-max-override"  # overridden
 
@@ -187,7 +188,7 @@ def _patch_httpx_to_return(status_code: int | None = None, raise_error: bool = F
         fake_client.head = MagicMock(return_value=resp)
     fake_client.__enter__ = MagicMock(return_value=fake_client)
     fake_client.__exit__ = MagicMock(return_value=False)
-    return patch("ranch.labs.httpx.Client", return_value=fake_client)
+    return patch("ranch.deploy.httpx.Client", return_value=fake_client)
 
 
 def test_health_ok_on_200():
@@ -237,25 +238,25 @@ def test_health_builds_url_with_health_path():
     fake_client.head = fake_head
     fake_client.__enter__ = MagicMock(return_value=fake_client)
     fake_client.__exit__ = MagicMock(return_value=False)
-    with patch("ranch.labs.httpx.Client", return_value=fake_client):
+    with patch("ranch.deploy.httpx.Client", return_value=fake_client):
         wait_for_health("https://x.com/", "/healthz",
                          timeout_seconds=1, interval_seconds=0.01)
     assert captured["url"] == "https://x.com/healthz"
 
 
-# ─── deploy_run_to_labs ───────────────────────────────────────────
+# ─── deploy_run ───────────────────────────────────────────
 
 
 def test_deploy_missing_run():
     init_db()
-    r = deploy_run_to_labs(99_999)
+    r = deploy_run(99_999)
     assert r.ok is False
     assert "not found" in r.reason
 
 
 def test_deploy_missing_branch(tmp_path):
     rid = _make_run(branch=None, cwd=str(tmp_path))
-    r = deploy_run_to_labs(rid)
+    r = deploy_run(rid)
     assert r.ok is False
     assert "branch_name" in r.reason
 
@@ -265,7 +266,7 @@ def test_deploy_git_push_failure_surfaces_output(tmp_path):
     # Init repo so remote management works
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
 
-    with patch("ranch.labs._git") as fake_git:
+    with patch("ranch.deploy._git") as fake_git:
         # First call: remote get-url returns nonzero (missing)
         # Second call: remote add → ok
         # Third call: push → fail
@@ -274,18 +275,18 @@ def test_deploy_git_push_failure_surfaces_output(tmp_path):
             (0, "", ""),
             (128, "", "fatal: deploy denied"),
         ]
-        r = deploy_run_to_labs(rid)
+        r = deploy_run(rid)
     assert r.ok is False
     assert "push failed" in r.reason
     assert "deploy denied" in r.push_output
 
 
 def test_deploy_happy_path(tmp_path):
-    """Push succeeds, health responds 200 → labs_url + labs_deployed_at set."""
+    """Push succeeds, health responds 200 → deploy_url + deployed_at set."""
     rid = _make_run(cwd=str(tmp_path))
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
 
-    with patch("ranch.labs._git") as fake_git, \
+    with patch("ranch.deploy._git") as fake_git, \
          _patch_httpx_to_return(200):
         # remote missing → add → push success
         fake_git.side_effect = [
@@ -293,37 +294,37 @@ def test_deploy_happy_path(tmp_path):
             (0, "", ""),
             (0, "successful deploy log", ""),
         ]
-        r = deploy_run_to_labs(rid, health_timeout_seconds=1)
+        r = deploy_run(rid, health_timeout_seconds=1)
 
     assert r.ok is True
     assert r.url == "https://max.staging.citemed.com"
     with db_session() as db:
         run = db.query(Run).filter_by(id=rid).one()
-        assert run.labs_url == "https://max.staging.citemed.com"
-        assert run.labs_deployed_at is not None
+        assert run.deploy_url == "https://max.staging.citemed.com"
+        assert run.deployed_at is not None
 
 
 def test_deploy_push_ok_but_health_fails(tmp_path):
     rid = _make_run(cwd=str(tmp_path))
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
 
-    with patch("ranch.labs._git") as fake_git, \
+    with patch("ranch.deploy._git") as fake_git, \
          _patch_httpx_to_return(503):
         fake_git.side_effect = [
             (1, "", "no remote"),
             (0, "", ""),
             (0, "deploy ok", ""),
         ]
-        r = deploy_run_to_labs(rid, health_timeout_seconds=0.05, health_poll_interval_seconds=0.01)
+        r = deploy_run(rid, health_timeout_seconds=0.05, health_poll_interval_seconds=0.01)
 
     assert r.ok is False
     assert "health check failed" in r.reason
     # URL should still be reported (deploy succeeded; only health failed)
     assert r.url == "https://max.staging.citemed.com"
-    # labs_url NOT set (we only set on full success)
+    # deploy_url NOT set (we only set on full success)
     with db_session() as db:
         run = db.query(Run).filter_by(id=rid).one()
-        assert run.labs_url is None
+        assert run.deploy_url is None
 
 
 def test_deploy_passes_force_flag_when_requested(tmp_path):
@@ -331,7 +332,7 @@ def test_deploy_passes_force_flag_when_requested(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
 
     captured_pushes = []
-    with patch("ranch.labs._git") as fake_git, \
+    with patch("ranch.deploy._git") as fake_git, \
          _patch_httpx_to_return(200):
         def side(args, cwd, timeout=None):
             if "push" in args:
@@ -349,44 +350,147 @@ def test_deploy_passes_force_flag_when_requested(tmp_path):
             n = len(captured_pushes)
             return [(1, "", "no remote"), (0, "", ""), (0, "deploy ok", "")][n - 1]
         fake_git.side_effect = capturing
-        deploy_run_to_labs(rid, force=True, health_timeout_seconds=1)
+        deploy_run(rid, force=True, health_timeout_seconds=1)
 
     push_call = captured_pushes[-1]
     assert "push" in push_call
     assert "--force" in push_call
 
 
+# ─── inspect_current_deploy ──────────────────────────────────────
+
+
+def test_inspect_no_remote_main_first_deploy(tmp_path):
+    """Fresh app — `ls-remote main` returns empty; that's fine."""
+    with patch("ranch.deploy._git") as fake_git:
+        fake_git.side_effect = [
+            (0, "", ""),                # ls-remote: empty
+            (0, "localabc\n", ""),      # rev-parse local
+        ]
+        state = inspect_current_deploy(tmp_path, "dokku-max", "feature/foo")
+    assert state.deployed_sha is None
+    assert state.local_head_sha == "localabc"
+    assert state.commits_ahead is None
+    # error populated because we couldn't read main — soft signal only
+    assert state.error is not None
+
+
+def test_inspect_extracts_remote_sha(tmp_path):
+    with patch("ranch.deploy._git") as fake_git:
+        fake_git.side_effect = [
+            (0, "deadbeef\trefs/heads/main\n", ""),  # ls-remote
+            (0, "cafef00d\n", ""),                    # rev-parse local
+            (0, "5\n", ""),                            # rev-list --count
+        ]
+        state = inspect_current_deploy(tmp_path, "dokku-max", "feature/foo")
+    assert state.deployed_sha == "deadbeef"
+    assert state.local_head_sha == "cafef00d"
+    assert state.commits_ahead == 5
+
+
+def test_inspect_same_sha_no_commits_ahead_query(tmp_path):
+    """If local and remote SHAs match, skip the rev-list — no commits ahead."""
+    with patch("ranch.deploy._git") as fake_git:
+        fake_git.side_effect = [
+            (0, "samesha\trefs/heads/main\n", ""),
+            (0, "samesha\n", ""),
+        ]
+        state = inspect_current_deploy(tmp_path, "dokku-max", "feature/foo")
+    assert state.deployed_sha == state.local_head_sha
+    assert state.commits_ahead is None
+
+
+def test_inspect_handles_rev_list_failure_gracefully(tmp_path):
+    """If rev-list fails (remote SHA not in local objects), commits_ahead stays None."""
+    with patch("ranch.deploy._git") as fake_git:
+        fake_git.side_effect = [
+            (0, "remotesha\trefs/heads/main\n", ""),
+            (0, "localsha\n", ""),
+            (128, "", "unknown revision"),  # rev-list fails — sha not fetched locally
+        ]
+        state = inspect_current_deploy(tmp_path, "dokku-max", "feature/foo")
+    assert state.deployed_sha == "remotesha"
+    assert state.local_head_sha == "localsha"
+    assert state.commits_ahead is None  # gracefully None
+
+
 # ─── CLI integration ─────────────────────────────────────────────
 
 
-def test_cli_labs_deploy_happy_path(tmp_path):
+def test_cli_deploy_happy_path(tmp_path):
+    """End-to-end CLI with --yes (skip confirmation). All _git calls mocked."""
     rid = _make_run(cwd=str(tmp_path))
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
 
-    with patch("ranch.labs._git") as fake_git, \
+    with patch("ranch.deploy._git") as fake_git, \
          _patch_httpx_to_return(200):
+        # Order of _git calls in the CLI flow:
+        #   inspect:   ls-remote, rev-parse
+        #   deploy:    remote get-url (missing), remote add, push
         fake_git.side_effect = [
-            (1, "", "no remote"),
-            (0, "", ""),
-            (0, "deploy ok\nline 2", ""),
+            (0, "", ""),                       # ls-remote: no main on remote yet (first deploy)
+            (0, "abc123def456\n", ""),         # rev-parse: local HEAD
+            (1, "", "no remote"),              # remote get-url: missing
+            (0, "", ""),                       # remote add
+            (0, "deploy ok\nline 2", ""),      # push
         ]
-        result = CliRunner().invoke(cli, ["labs", "deploy", str(rid), "--health-timeout", "1"])
+        result = CliRunner().invoke(cli, ["deploy", str(rid), "--yes", "--health-timeout", "1"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "Deploy live" in result.output
     assert "max.staging.citemed.com" in result.output
 
 
-def test_cli_labs_deploy_failure_aborts(tmp_path):
+def test_cli_deploy_failure_aborts(tmp_path):
     rid = _make_run(cwd=str(tmp_path))
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
 
-    with patch("ranch.labs._git") as fake_git:
+    with patch("ranch.deploy._git") as fake_git:
         fake_git.side_effect = [
-            (1, "", "no remote"),
-            (0, "", ""),
-            (128, "", "fatal: nope"),
+            (0, "", ""),                       # ls-remote
+            (0, "abc123\n", ""),               # rev-parse
+            (1, "", "no remote"),              # remote get-url
+            (0, "", ""),                       # remote add
+            (128, "", "fatal: nope"),          # push fails
         ]
-        result = CliRunner().invoke(cli, ["labs", "deploy", str(rid)])
+        result = CliRunner().invoke(cli, ["deploy", str(rid), "--yes"])
     assert result.exit_code != 0
     assert "Deploy failed" in result.output
+
+
+def test_cli_deploy_renders_pre_deploy_state_for_overwrite(tmp_path):
+    """When remote main has a different SHA from local, render 'will overwrite'."""
+    rid = _make_run(cwd=str(tmp_path))
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+    with patch("ranch.deploy._git") as fake_git, \
+         _patch_httpx_to_return(200):
+        fake_git.side_effect = [
+            (0, "oldsha000000000\trefs/heads/main\n", ""),  # ls-remote → existing sha
+            (0, "newsha111111111\n", ""),                    # rev-parse → local sha
+            (0, "3\n", ""),                                  # rev-list --count → 3 ahead
+            (1, "", "no remote"),                            # remote get-url
+            (0, "", ""),                                     # remote add
+            (0, "deploy ok", ""),                            # push
+        ]
+        result = CliRunner().invoke(cli, ["deploy", str(rid), "--yes", "--health-timeout", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "Will overwrite remote main: oldsha000000" in result.output
+    assert "3 commits ahead" in result.output
+
+
+def test_cli_deploy_confirmation_no_aborts(tmp_path):
+    """Without --yes, the confirmation prompt blocks until 'y' is entered.
+    Sending 'n' (or empty input) cancels cleanly."""
+    rid = _make_run(cwd=str(tmp_path))
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+    with patch("ranch.deploy._git") as fake_git:
+        fake_git.side_effect = [
+            (0, "", ""),               # ls-remote
+            (0, "abc\n", ""),          # rev-parse
+            # Nothing past this — confirmation should bail before deploy_run runs
+        ]
+        result = CliRunner().invoke(cli, ["deploy", str(rid)], input="n\n")
+    assert "Cancelled" in result.output

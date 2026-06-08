@@ -163,10 +163,9 @@ class Run(Base):
     pr_platform         = Column(String, nullable=True)     # "bb" | "gh"
     pr_url              = Column(String, nullable=True)
     last_pr_check_at    = Column(DateTime, nullable=True)   # H20: last time the hand polled this PR for review comments
-    # H9 — labs deploy state
-    labs_url            = Column(String, nullable=True)     # public URL after deploy succeeded
-    labs_deployed_at    = Column(DateTime, nullable=True)   # when the deploy + health check completed
-    last_labs_check_at  = Column(DateTime, nullable=True)   # H20 P3 cadence — for hand-side polling
+    # H9 — per-hand staging deploy state (operator-driven, not auto-fire)
+    deploy_url          = Column(String, nullable=True)     # public URL after deploy succeeded
+    deployed_at         = Column(DateTime, nullable=True)   # when the deploy + health check completed
 
     checkpoints    = relationship("Checkpoint",    back_populates="run", lazy="dynamic")
     interjections  = relationship("Interjection",  back_populates="run", lazy="dynamic")
