@@ -367,3 +367,238 @@ def test_resolve_comment_unknown_comment():
     result = CliRunner().invoke(cli, ["resolve-comment", str(run_id), "nonexistent"])
     assert result.exit_code != 0
     assert "not found" in result.output.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  H20 Phase 1 — tests for the reusable ranch/pr_loop.py functions.
+#  The above tests cover the CLI surface; these cover the pure
+#  helpers that the ranch hand calls into.
+# ═══════════════════════════════════════════════════════════════════
+
+from datetime import timedelta as _td
+
+from ranch.models import Dossier as _Dossier
+from ranch.pr_loop import (
+    PRPollCandidate,
+    filter_by_poll_cadence,
+    poll_pr_for_run,
+    runs_pending_pr_review,
+)
+from ranch.runner.pr_backend import FetchedComment as _FC
+
+
+def _make_run_h20(
+    *, agent: str = "max", ticket: str = "ECD-1",
+    state: str = "completed",
+    pr_id: str | None = None,
+    branch: str | None = "feature/ECD-1",
+    cwd: str = "/tmp",
+    ended_at: datetime | None = None,
+    last_pr_check_at: datetime | None = None,
+) -> int:
+    init_db()
+    with db_session() as db:
+        run = Run(
+            agent=agent, ticket=ticket, cwd=cwd, initial_prompt="x",
+            state=state, branch_name=branch, pr_id=pr_id,
+            ended_at=ended_at or datetime.now(timezone.utc),
+            last_pr_check_at=last_pr_check_at,
+        )
+        if pr_id:
+            run.pr_platform = "bb"
+        db.add(run)
+        db.flush()
+        return run.id
+
+
+def _add_dossier_h20(run_id: int, state: str = "parked"):
+    with db_session() as db:
+        payload = {"state": state, "just_did": "x", "plan": [], "blocker": "x"}
+        db.add(_Dossier(run_id=run_id, state=state, payload_json=json.dumps(payload)))
+
+
+def _fc(id_: str, body: str = "lgtm", author: str = "ethan") -> _FC:
+    return _FC(
+        platform_comment_id=id_, author=author,
+        file_path=None, line_number=None, body=body,
+        created_at_remote=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+
+
+# ─── poll_pr_for_run ──────────────────────────────────────────────
+
+
+def test_h20_poll_returns_error_for_missing_run():
+    init_db()
+    r = poll_pr_for_run(99_999)
+    assert r.ok is False
+    assert "not found" in r.reason
+
+
+def test_h20_poll_handles_no_branch_and_no_pr():
+    rid = _make_run_h20(branch=None, pr_id=None)
+    r = poll_pr_for_run(rid)
+    assert r.ok is False
+    assert "no branch_name" in r.reason
+
+
+def test_h20_poll_loop_friendly_when_pr_not_yet_open():
+    """Discovery returns None → not an error, just nothing to do yet."""
+    rid = _make_run_h20(branch="feature/ECD-1", pr_id=None)
+    backend = MagicMock()
+    backend.discover_pr_by_branch = MagicMock(return_value=None)
+    with patch("ranch.pr_loop.get_backend", return_value=backend), \
+         patch("ranch.pr_loop.detect_platform", return_value="bb"):
+        r = poll_pr_for_run(rid)
+    assert r.ok is True
+    assert r.pr_id is None
+    assert r.new_comment_count == 0
+
+
+def test_h20_poll_discovery_persists_pr_id():
+    rid = _make_run_h20(branch="feature/ECD-1", pr_id=None)
+    backend = MagicMock()
+    backend.discover_pr_by_branch = MagicMock(return_value=("42", "https://bb/pr/42"))
+    backend.fetch_comments = MagicMock(return_value=[])
+    with patch("ranch.pr_loop.get_backend", return_value=backend), \
+         patch("ranch.pr_loop.detect_platform", return_value="bb"):
+        r = poll_pr_for_run(rid)
+    assert r.ok and r.pr_id == "42"
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=rid).one()
+        assert run.pr_id == "42"
+        assert run.pr_url == "https://bb/pr/42"
+
+
+def test_h20_poll_persists_new_comments_and_is_idempotent():
+    rid = _make_run_h20(pr_id="42")
+    backend = MagicMock()
+    backend.fetch_comments = MagicMock(return_value=[_fc("c1"), _fc("c2")])
+    with patch("ranch.pr_loop.get_backend", return_value=backend), \
+         patch("ranch.pr_loop.detect_platform", return_value="bb"):
+        r1 = poll_pr_for_run(rid)
+        assert r1.ok and r1.new_comment_count == 2
+        r2 = poll_pr_for_run(rid)
+    assert r2.new_comment_count == 0
+    with db_session() as db:
+        rows = db.query(ReviewComment).filter_by(run_id=rid).all()
+    assert {r.platform_comment_id for r in rows} == {"c1", "c2"}
+
+
+def test_h20_poll_surfaces_backend_error_cleanly():
+    rid = _make_run_h20(pr_id="42")
+    backend = MagicMock()
+    backend.fetch_comments = MagicMock(side_effect=PRBackendError("bb auth failed"))
+    with patch("ranch.pr_loop.get_backend", return_value=backend), \
+         patch("ranch.pr_loop.detect_platform", return_value="bb"):
+        r = poll_pr_for_run(rid)
+    assert r.ok is False
+    assert "comment fetch failed" in r.reason
+    assert "bb auth failed" in r.reason
+
+
+def test_h20_poll_touches_last_check_at_even_when_no_comments():
+    rid = _make_run_h20(pr_id="42")
+    backend = MagicMock()
+    backend.fetch_comments = MagicMock(return_value=[])
+    with patch("ranch.pr_loop.get_backend", return_value=backend), \
+         patch("ranch.pr_loop.detect_platform", return_value="bb"):
+        poll_pr_for_run(rid)
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=rid).one()
+        assert run.last_pr_check_at is not None
+        # SQLite returns naive datetimes; compare with naive utcnow.
+        delta = datetime.utcnow() - run.last_pr_check_at
+        assert delta.total_seconds() < 5
+
+
+# ─── runs_pending_pr_review ───────────────────────────────────────
+
+
+def test_h20_pending_excludes_non_terminal_runs():
+    rid = _make_run_h20(state="planning", pr_id="42")
+    _add_dossier_h20(rid, "parked")
+    assert runs_pending_pr_review("max") == []
+
+
+def test_h20_pending_excludes_runs_without_pr_or_branch():
+    rid = _make_run_h20(pr_id=None, branch=None)
+    _add_dossier_h20(rid, "parked")
+    assert runs_pending_pr_review("max") == []
+
+
+def test_h20_pending_excludes_when_dossier_not_parked():
+    rid = _make_run_h20(pr_id="42")
+    _add_dossier_h20(rid, "coding")
+    assert runs_pending_pr_review("max") == []
+
+
+def test_h20_pending_includes_when_all_conditions_met():
+    rid = _make_run_h20(pr_id="42")
+    _add_dossier_h20(rid, "parked")
+    out = runs_pending_pr_review("max")
+    assert len(out) == 1
+    assert out[0].run_id == rid
+    assert out[0].pr_id == "42"
+
+
+def test_h20_pending_scoped_by_agent():
+    rid_jeffy = _make_run_h20(agent="jeffy", pr_id="50")
+    _add_dossier_h20(rid_jeffy, "parked")
+    rid_max = _make_run_h20(agent="max", pr_id="51")
+    _add_dossier_h20(rid_max, "parked")
+    assert [c.run_id for c in runs_pending_pr_review("max")] == [rid_max]
+
+
+def test_h20_pending_no_agent_filter_returns_all():
+    rid_a = _make_run_h20(agent="max", pr_id="60")
+    _add_dossier_h20(rid_a, "parked")
+    rid_b = _make_run_h20(agent="jeffy", pr_id="61")
+    _add_dossier_h20(rid_b, "parked")
+    ids = {c.run_id for c in runs_pending_pr_review()}
+    assert ids == {rid_a, rid_b}
+
+
+def test_h20_pending_can_skip_parked_filter():
+    rid = _make_run_h20(pr_id="42")
+    _add_dossier_h20(rid, "coding")
+    out = runs_pending_pr_review("max", require_parked_dossier=False)
+    assert len(out) == 1
+
+
+# ─── filter_by_poll_cadence ───────────────────────────────────────
+
+
+def _cand(run_id: int = 1, last: datetime | None = None) -> PRPollCandidate:
+    return PRPollCandidate(
+        run_id=run_id, agent="max", ticket="ECD-1",
+        pr_id="42", pr_platform="bb", branch_name="b",
+        last_check_at=last,
+    )
+
+
+def test_h20_cadence_passes_never_polled():
+    out = filter_by_poll_cadence([_cand(last=None)], interval_seconds=60)
+    assert len(out) == 1
+
+
+def test_h20_cadence_drops_recently_polled():
+    recent = datetime.now(timezone.utc) - _td(seconds=10)
+    out = filter_by_poll_cadence([_cand(last=recent)], interval_seconds=60)
+    assert out == []
+
+
+def test_h20_cadence_passes_old_enough():
+    old = datetime.now(timezone.utc) - _td(seconds=120)
+    out = filter_by_poll_cadence([_cand(last=old)], interval_seconds=60)
+    assert len(out) == 1
+
+
+def test_h20_cadence_independent_per_candidate():
+    recent = datetime.now(timezone.utc) - _td(seconds=10)
+    old = datetime.now(timezone.utc) - _td(seconds=120)
+    out = filter_by_poll_cadence(
+        [_cand(run_id=1, last=recent), _cand(run_id=2, last=old)],
+        interval_seconds=60,
+    )
+    assert [c.run_id for c in out] == [2]

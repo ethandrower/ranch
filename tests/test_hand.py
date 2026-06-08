@@ -548,3 +548,158 @@ async def test_orchestrator_on_checkpoint_only_auto_fires_listed_kinds():
     # pre_push: should NOT auto-fire
     await orch.on_checkpoint("pre_push", "ok", None)
     assert not orch._approval_ready.is_set()
+
+
+# ─── H20: PR review unblock detection ───────────────────────────
+
+
+def _seed_parked_pr_run(agent: str = "max", pr_id: str = "42",
+                         last_check: datetime | None = None) -> int:
+    init_db()
+    with db_session() as db:
+        run = Run(
+            agent=agent, ticket="ECD-7", cwd="/tmp", initial_prompt="x",
+            state="completed", branch_name="feature/ECD-7",
+            pr_id=pr_id, pr_platform="bb",
+            ended_at=datetime.now(timezone.utc),
+            last_pr_check_at=last_check,
+        )
+        db.add(run); db.flush()
+        rid = run.id
+    _add_dossier(rid, "parked", blocker="awaiting_pr_review",
+                  plan=[{"step": "x", "status": "done"}])
+    return rid
+
+
+@pytest.mark.asyncio
+async def test_check_pr_review_unblocks_fires_respond_when_new_comments(tmp_path):
+    """Happy path: parked PR, throttle satisfied, poll returns new comments → respond."""
+    from ranch.pr_loop import PollResult
+    rid = _seed_parked_pr_run()
+    poll_calls: list[int] = []
+    respond_calls: list[int] = []
+
+    def fake_poll(run_id: int):
+        poll_calls.append(run_id)
+        return PollResult(ok=True, pr_id="42", new_comment_count=2,
+                          new_comments=[])
+    async def fake_respond(run_id: int):
+        respond_calls.append(run_id)
+
+    hand = RanchHand(
+        "max", tmp_path,
+        pr_poll_fn=fake_poll, respond_pr_fn=fake_respond,
+    )
+    fired = await hand._check_pr_review_unblocks()
+    assert fired is True
+    assert poll_calls == [rid]
+    assert respond_calls == [rid]
+
+
+@pytest.mark.asyncio
+async def test_check_pr_review_unblocks_skips_when_no_new_comments(tmp_path):
+    from ranch.pr_loop import PollResult
+    _seed_parked_pr_run()
+    respond_calls: list[int] = []
+
+    def fake_poll(run_id: int):
+        return PollResult(ok=True, pr_id="42", new_comment_count=0)
+    async def fake_respond(run_id: int):
+        respond_calls.append(run_id)
+
+    hand = RanchHand(
+        "max", tmp_path,
+        pr_poll_fn=fake_poll, respond_pr_fn=fake_respond,
+    )
+    fired = await hand._check_pr_review_unblocks()
+    assert fired is False
+    assert respond_calls == []
+
+
+@pytest.mark.asyncio
+async def test_check_pr_review_unblocks_respects_cadence(tmp_path):
+    """Run was polled 5s ago; cadence is 120s; we should NOT re-poll yet."""
+    recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+    _seed_parked_pr_run(last_check=recent)
+    poll_calls: list[int] = []
+    def fake_poll(run_id: int):
+        poll_calls.append(run_id)
+        return None
+    async def fake_respond(_): pass
+
+    hand = RanchHand(
+        "max", tmp_path,
+        pr_poll_interval_seconds=120.0,
+        pr_poll_fn=fake_poll, respond_pr_fn=fake_respond,
+    )
+    fired = await hand._check_pr_review_unblocks()
+    assert fired is False
+    assert poll_calls == []
+
+
+@pytest.mark.asyncio
+async def test_check_pr_review_unblocks_polls_when_cadence_satisfied(tmp_path):
+    """Run was polled 200s ago; cadence is 120s; we SHOULD re-poll."""
+    from ranch.pr_loop import PollResult
+    old = datetime.now(timezone.utc) - timedelta(seconds=200)
+    rid = _seed_parked_pr_run(last_check=old)
+    poll_calls: list[int] = []
+    def fake_poll(run_id: int):
+        poll_calls.append(run_id)
+        return PollResult(ok=True, pr_id="42", new_comment_count=0)
+    async def fake_respond(_): pass
+
+    hand = RanchHand(
+        "max", tmp_path,
+        pr_poll_interval_seconds=120.0,
+        pr_poll_fn=fake_poll, respond_pr_fn=fake_respond,
+    )
+    await hand._check_pr_review_unblocks()
+    assert poll_calls == [rid]
+
+
+@pytest.mark.asyncio
+async def test_check_pr_review_unblocks_no_candidates_returns_false(tmp_path):
+    init_db()
+    hand = RanchHand("max", tmp_path)
+    fired = await hand._check_pr_review_unblocks()
+    assert fired is False
+
+
+@pytest.mark.asyncio
+async def test_check_pr_review_unblocks_swallows_poll_errors(tmp_path):
+    """A backend error on one candidate shouldn't abort the loop."""
+    _seed_parked_pr_run()
+    def fake_poll(run_id: int):
+        raise RuntimeError("bb down")
+    hand = RanchHand("max", tmp_path, pr_poll_fn=fake_poll)
+    fired = await hand._check_pr_review_unblocks()
+    assert fired is False
+
+
+@pytest.mark.asyncio
+async def test_hand_main_loop_fires_pr_response_before_triage(tmp_path):
+    """Integration: main loop reaches _check_pr_review_unblocks step,
+    fires the respond, then skips triage that cycle."""
+    from ranch.pr_loop import PollResult
+    rid = _seed_parked_pr_run()
+    respond_calls: list[int] = []
+
+    def triage_fn(_p):
+        return []
+    def fake_poll(run_id: int):
+        return PollResult(ok=True, pr_id="42", new_comment_count=1)
+    async def fake_respond(run_id: int):
+        respond_calls.append(run_id)
+
+    hand = RanchHand(
+        "max", tmp_path, poll_seconds=0.01,
+        triage_fn=triage_fn,
+        pr_poll_fn=fake_poll,
+        respond_pr_fn=fake_respond,
+    )
+    async def stop():
+        await asyncio.sleep(0.05)
+        hand.stop_requested = True
+    await asyncio.gather(hand.run(), stop())
+    assert respond_calls == [rid]
