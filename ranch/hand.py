@@ -172,6 +172,18 @@ def _snapshot_run(run: "Run") -> _RunSnapshot:
     return _RunSnapshot(id=run.id, agent=run.agent, ticket=run.ticket, state=run.state)
 
 
+def _touch_pr_check_at(run_id: int) -> None:
+    """H20: stamp `Run.last_pr_check_at` so cadence filtering works.
+
+    Called by the hand AFTER every pr_poll_fn invocation (success or fail)
+    so cadence holds regardless of what the poll function does internally.
+    """
+    with db_session() as db:
+        db.query(Run).filter_by(id=run_id).update({
+            "last_pr_check_at": datetime.now(timezone.utc),
+        })
+
+
 @dataclass
 class _ApprovedPropose:
     """A parked propose run the operator has just approved — the hand's
@@ -321,10 +333,15 @@ class RanchHand:
         idle_log_freq_minutes: float = 30.0,
         jira_project: str | None = None,
         execute_budget_seconds: float = 600.0,
+        # H20 — PR review polling cadence + response budget
+        pr_poll_interval_seconds: float = 120.0,
+        pr_response_budget_seconds: float = 600.0,
         triage_fn: Optional[Callable[[str | None], list[str]]] = None,
         scope_fn: Optional[Callable[[str], None]] = None,
         propose_fn: Optional[Callable[[str], Awaitable[None]]] = None,
         execute_fn: Optional[Callable[[_ApprovedPropose], Awaitable[None]]] = None,
+        pr_poll_fn: Optional[Callable[[int], "object"]] = None,
+        respond_pr_fn: Optional[Callable[[int], Awaitable[None]]] = None,
     ):
         self.name = name
         self.cwd = cwd
@@ -332,6 +349,8 @@ class RanchHand:
         self.idle_log_freq_minutes = idle_log_freq_minutes
         self.jira_project = jira_project
         self.execute_budget_seconds = execute_budget_seconds
+        self.pr_poll_interval_seconds = pr_poll_interval_seconds
+        self.pr_response_budget_seconds = pr_response_budget_seconds
 
         # Injection seams for tests + offline mode. Default impls hit Jira /
         # invoke H5+H6; the validation harness injects synthetic versions.
@@ -339,6 +358,8 @@ class RanchHand:
         self.scope_fn = scope_fn or self._default_scope
         self.propose_fn = propose_fn or self._default_propose
         self.execute_fn = execute_fn or self._default_execute
+        self.pr_poll_fn = pr_poll_fn or self._default_pr_poll
+        self.respond_pr_fn = respond_pr_fn or self._default_respond_pr
 
         self.stop_requested = False
         self._last_idle_log = datetime.now(timezone.utc) - timedelta(days=1)
@@ -372,6 +393,64 @@ class RanchHand:
         with JiraClient(JiraConfig.load()) as client:
             scope = build_scope(ticket_key, jira=client, cwd=self.cwd)
         save_scope(scope)
+
+    async def _check_pr_review_unblocks(self) -> bool:
+        """H20: for every parked-post-push run owned by this hand, see if
+        new review comments have landed. If so, fire the respond flow.
+
+        Returns True when we actually fired a response — the main loop
+        uses this to skip the rest of the cycle (we're busy responding).
+        """
+        from .pr_loop import filter_by_poll_cadence, runs_pending_pr_review
+
+        candidates = runs_pending_pr_review(agent=self.name)
+        if not candidates:
+            return False
+        eligible = filter_by_poll_cadence(
+            candidates, interval_seconds=self.pr_poll_interval_seconds,
+        )
+        for c in eligible:
+            try:
+                result = self.pr_poll_fn(c.run_id)
+            except Exception as e:
+                console.print(
+                    f"[red]{self.name}: PR poll failed for run #{c.run_id} — {e}[/red]"
+                )
+                # Mark as polled regardless so we don't hammer a broken backend
+                _touch_pr_check_at(c.run_id)
+                continue
+            # Cadence tracking is the hand's concern, not the poll function's —
+            # this way mock polls in tests and real polls both respect cadence.
+            _touch_pr_check_at(c.run_id)
+            ncc = getattr(result, "new_comment_count", 0)
+            if ncc <= 0:
+                continue
+            pr_label = getattr(result, "pr_id", None) or c.pr_id or "?"
+            console.print(
+                f"[bold yellow]{self.name}: {ncc} new comment(s) on PR #{pr_label} "
+                f"(run #{c.run_id}) — resuming agent[/bold yellow]"
+            )
+            try:
+                await self.respond_pr_fn(c.run_id)
+            except Exception as e:
+                console.print(
+                    f"[red]{self.name}: respond-pr failed for run #{c.run_id} — {e}[/red]"
+                )
+            return True
+        return False
+
+    def _default_pr_poll(self, run_id: int):
+        """H20: synchronously poll Bitbucket/GitHub for new review comments."""
+        from .pr_loop import poll_pr_for_run
+        return poll_pr_for_run(run_id)
+
+    async def _default_respond_pr(self, run_id: int) -> None:
+        """H20: resume the SDK session with pending review comments as the brief."""
+        from .pr_loop import respond_to_pr_review
+        await respond_to_pr_review(
+            run_id,
+            budget_seconds=self.pr_response_budget_seconds,
+        )
 
     async def _default_execute(self, approved: "_ApprovedPropose") -> None:
         """Run the structured-workflow orchestrator against the approved plan.
@@ -487,7 +566,15 @@ class RanchHand:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                # 3. Recently parked & still within the operator-review window?
+                # 3. H20: any in-flight PR has new review comments? → respond.
+                pr_unblocked = await self._check_pr_review_unblocks()
+                if pr_unblocked:
+                    # Done one full response cycle; on the next tick we'll
+                    # re-evaluate active state.
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
+                # 4. Recently parked & still within the operator-review window?
                 parked = _last_parked_run_for(self.name)
                 if parked:
                     self._maybe_log_idle(
@@ -496,7 +583,7 @@ class RanchHand:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                # 3. Nothing in flight, nothing parked → triage for new work.
+                # 5. Nothing in flight, nothing parked → triage for new work.
                 console.print(f"[cyan]{self.name}: no active work — triaging...[/cyan]")
                 try:
                     candidates = self.triage_fn(self.jira_project)
