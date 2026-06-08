@@ -47,6 +47,9 @@ def _migrate():
         ("runs", "pr_platform", "VARCHAR"),
         ("runs", "pr_url", "VARCHAR"),
         ("runs", "last_pr_check_at", "DATETIME"),
+        ("runs", "labs_url", "VARCHAR"),
+        ("runs", "labs_deployed_at", "DATETIME"),
+        ("runs", "last_labs_check_at", "DATETIME"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

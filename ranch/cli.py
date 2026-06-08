@@ -613,6 +613,56 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.group("labs")
+def labs_group():
+    """Labs deploy to per-hand Dokku app (Phase H9)."""
+
+
+@labs_group.command("deploy")
+@click.argument("run_id", type=int)
+@click.option("--branch", default=None, help="Source branch to push (defaults to Run.branch_name).")
+@click.option("--force", is_flag=True, help="Pass --force to git push (fine on dev envs).")
+@click.option("--health-timeout", default=180.0, type=float, help="Seconds to wait for the URL to respond after push.")
+def labs_deploy_cmd(run_id, branch, force, health_timeout):
+    """Push the run's branch to its agent's Dokku app, then health-check.
+
+    Reads the [dokku] + [agents.<name>.dokku] config blocks from
+    ~/.ranch/config.toml (sensible defaults: dev-<agent> on
+    dokku@178.105.80.165, URL <agent>.staging.citemed.com).
+    """
+    from .labs import deploy_run_to_labs
+
+    console.print(f"[cyan]Deploying run #{run_id} to labs...[/cyan]")
+    result = deploy_run_to_labs(
+        run_id,
+        source_branch=branch,
+        force=force,
+        health_timeout_seconds=health_timeout,
+    )
+
+    if result.url:
+        console.print(f"[dim]URL: {result.url}[/dim]")
+    console.print(f"[dim]Elapsed: {result.elapsed_seconds:.1f}s[/dim]")
+    if result.push_output:
+        # Show the last ~10 lines of push output so the operator can
+        # spot build errors at a glance.
+        lines = result.push_output.splitlines()
+        tail = "\n".join(lines[-10:]) if len(lines) > 10 else result.push_output
+        console.print("[dim]push (tail):[/dim]")
+        console.print(tail)
+
+    if result.ok:
+        console.print(f"[green]✓ Deploy live at {result.url}[/green]")
+        return
+
+    console.print(f"[red]✗ Deploy failed[/red]")
+    if result.reason:
+        console.print(f"[red]  reason: {result.reason}[/red]")
+    if result.health and result.health.error:
+        console.print(f"[red]  health: {result.health.error}[/red]")
+    raise click.Abort()
+
+
 @cli.group("pr")
 def pr_group():
     """PR draft + open (Phase H10)."""
