@@ -466,6 +466,61 @@ def log_cmd(run_id):
         click.echo(run.log_path)
 
 
+@cli.command("dossier")
+@click.argument("run_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Emit raw JSON instead of rendered text.")
+def dossier_cmd(run_id, as_json):
+    """Show the latest dossier (agent self-report) for a run."""
+    import json as _json
+    from .models import Dossier, Run
+
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=run_id).one_or_none()
+        if not run:
+            console.print(f"[red]Run #{run_id} not found[/red]")
+            raise click.Abort()
+        latest = (
+            db.query(Dossier)
+            .filter_by(run_id=run_id)
+            .order_by(Dossier.created_at.desc())
+            .first()
+        )
+        if not latest:
+            if as_json:
+                click.echo("null")
+            else:
+                console.print(f"[yellow]Run #{run_id} has no dossier yet.[/yellow]")
+            return
+        payload = _json.loads(latest.payload_json)
+
+    if as_json:
+        click.echo(_json.dumps(payload, indent=2))
+        return
+
+    console.print(f"[bold]Run #{run_id}[/bold]  [dim]{run.agent} / {run.ticket or 'ad-hoc'}[/dim]")
+    console.print(f"State: [cyan]{payload['state']}[/cyan]")
+    console.print(f"Just did: {payload['just_did']}")
+    if payload.get("blocker"):
+        console.print(f"[yellow]Blocker:[/yellow] {payload['blocker']}")
+    plan = payload.get("plan") or []
+    if plan:
+        console.print("\n[bold]Plan[/bold]")
+        for step in plan:
+            mark = {"done": "✓", "in_progress": "▸", "pending": "·"}.get(step["status"], "·")
+            color = {"done": "green", "in_progress": "yellow", "pending": "dim"}.get(step["status"], "white")
+            console.print(f"  [{color}]{mark}[/{color}] {step['step']}")
+            if step.get("notes"):
+                console.print(f"      [dim]{step['notes']}[/dim]")
+    options = payload.get("options") or []
+    if options:
+        console.print("\n[bold]Options[/bold]")
+        for opt in options:
+            console.print(f"  • [bold]{opt['label']}[/bold] — {opt['description']}")
+    files = payload.get("files_touched") or []
+    if files:
+        console.print(f"\n[dim]Files touched ({len(files)}): {', '.join(files[:8])}{'...' if len(files) > 8 else ''}[/dim]")
+
+
 @cli.command()
 @click.option("--limit", default=20, help="Max rows to show")
 def feedback(limit):
