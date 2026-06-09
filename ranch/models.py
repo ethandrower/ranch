@@ -162,6 +162,7 @@ class Run(Base):
     pr_id               = Column(String, nullable=True)     # discovered via bb/gh pr list --head <branch>
     pr_platform         = Column(String, nullable=True)     # "bb" | "gh"
     pr_url              = Column(String, nullable=True)
+    last_pr_check_at    = Column(DateTime, nullable=True)   # H20: last time the hand polled this PR for review comments
 
     checkpoints    = relationship("Checkpoint",    back_populates="run", lazy="dynamic")
     interjections  = relationship("Interjection",  back_populates="run", lazy="dynamic")
