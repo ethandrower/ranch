@@ -170,6 +170,48 @@ def test_render_dossier_panel_handles_missing_payload():
     assert panel is not None
 
 
+def test_render_dossier_panel_shows_details_preview():
+    """When `details` is populated, the panel shows a short preview."""
+    from ranch.cli import _render_dossier_panel
+    payload = {
+        "state": "coding",
+        "just_did": "Wrote the failing test.",
+        "details": (
+            "Started by reading existing tests in tests/test_foo.py.\n"
+            "Identified the pattern: each test uses CliRunner + isolated DB.\n"
+            "Wrote a matching test for the new endpoint. Ran it — fails as expected."
+        ),
+        "plan": [{"step": "Test it", "status": "in_progress"}],
+    }
+    panel = _render_dossier_panel(
+        {"id": 1, "agent": "max", "ticket": "ECD-1", "state": "in_development"},
+        payload,
+    )
+    from io import StringIO
+    from rich.console import Console as RichConsole
+    buf = StringIO()
+    RichConsole(file=buf, force_terminal=False, width=120).print(panel)
+    output = buf.getvalue()
+    assert "Details:" in output
+    assert "Started by reading existing tests" in output
+
+
+def test_render_dossier_panel_skips_details_section_when_absent():
+    """Routine emissions without `details` shouldn't render the section."""
+    from ranch.cli import _render_dossier_panel
+    payload = {"state": "coding", "just_did": "Bumped a version.",
+               "plan": [{"step": "Bump", "status": "done"}]}
+    panel = _render_dossier_panel(
+        {"id": 1, "agent": "max", "ticket": "ECD-1", "state": "in_development"},
+        payload,
+    )
+    from io import StringIO
+    from rich.console import Console as RichConsole
+    buf = StringIO()
+    RichConsole(file=buf, force_terminal=False, width=120).print(panel)
+    assert "Details:" not in buf.getvalue()
+
+
 def test_render_dossier_panel_includes_all_sections():
     from ranch.cli import _render_dossier_panel
     payload = {
