@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ranch — Per-hand tabs prototype</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161922;
+    --panel-2: #1c2030;
+    --border: #262b3c;
+    --border-2: #313753;
+    --text: #e6e9ef;
+    --text-dim: #8a93a6;
+    --text-faint: #5a6378;
+    --accent: #6aa2ff;
+    --warn: #f5a623;
+    --warn-soft: #3a2e1e;
+    --ok: #4eb960;
+    --ok-soft: #1e3a2e;
+    --bad: #d85a5a;
+    --bad-soft: #3a1e1e;
+    --magenta: #b85cb8;
+    --cyan: #5cd0d0;
+    --shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  /* ─── Top bar ────────────────────────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    user-select: none;
+    height: 48px;
+  }
+  .brand {
+    padding: 0 18px;
+    display: flex; align-items: center;
+    font-weight: 600; font-size: 14px;
+    color: var(--text);
+    letter-spacing: -0.01em;
+    border-right: 1px solid var(--border);
+  }
+  .brand .brand-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-right: 8px;
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .tabs {
+    display: flex; align-items: stretch;
+    flex: 1;
+    gap: 0;
+  }
+  .tab {
+    padding: 0 18px;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+    font-size: 13px;
+    transition: background 0.12s, color 0.12s;
+    position: relative;
+  }
+  .tab:hover { background: var(--panel-2); color: var(--text); }
+  .tab.active {
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  .tab .badge {
+    background: var(--warn);
+    color: #1c1306;
+    font-size: 10.5px; font-weight: 700;
+    padding: 1px 6px; border-radius: 999px;
+    min-width: 18px; text-align: center;
+    line-height: 14px;
+  }
+  .tab .badge.zero {
+    background: transparent;
+    color: var(--text-faint);
+    border: 1px solid var(--border-2);
+    font-weight: 500;
+  }
+  .tab .badge.attention {
+    box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.18);
+  }
+  .tab .hand-status {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+  .tab .hand-status.idle { background: var(--text-faint); }
+  .tab .hand-status.stopped { background: var(--text-faint); opacity: 0.4; }
+  .topbar-right {
+    padding: 0 16px;
+    display: flex; align-items: center;
+    gap: 16px;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .topbar-right .meta { color: var(--text-faint); }
+
+  /* ─── Page body ──────────────────────────────────────────────────── */
+  .page {
+    padding: 24px 28px 100px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .hand-header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 18px;
+  }
+  .hand-header h1 {
+    margin: 0;
+    font-size: 22px; font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .hand-header .hand-meta {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .hand-actions {
+    display: flex; gap: 8px;
+  }
+  .btn-mini {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 5px 10px;
+    font-size: 11.5px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .btn-mini:hover { background: var(--panel-2); color: var(--text); }
+  /* ─── Section groups ─────────────────────────────────────────────── */
+  .group {
+    margin: 28px 0;
+  }
+  .group:first-child { margin-top: 0; }
+  .group-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .group-count {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--text-dim);
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .group.needs-you .group-header { color: var(--warn); }
+  .group.needs-you .group-count {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+  .group.in-flight .group-header { color: var(--cyan); }
+  .group.waiting .group-header { color: var(--text-faint); }
+
+  /* ─── Ticket card ────────────────────────────────────────────────── */
+  .ticket {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: border-color 0.12s;
+  }
+  .ticket:hover { border-color: var(--border-2); }
+  .ticket.attention {
+    border-left: 3px solid var(--warn);
+  }
+  .ticket .row {
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: 120px 1fr auto;
+    align-items: center;
+    gap: 16px;
+  }
+  .ticket .row.bordered {
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+    background: rgba(0,0,0,0.18);
+  }
+  .ticket .key {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  .ticket .summary {
+    color: var(--text);
+    font-weight: 500;
+    font-size: 13.5px;
+  }
+  .ticket .summary-sub {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 3px;
+  }
+  .ticket .state-pill {
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .state-planning  { color: var(--magenta); border-color: var(--magenta); background: rgba(184,92,184,0.08); }
+  .state-coding    { color: var(--cyan); border-color: var(--cyan); background: rgba(92,208,208,0.08); }
+  .state-testing   { color: var(--warn); border-color: var(--warn); background: rgba(245,166,35,0.08); }
+  .state-parked    { color: var(--warn); border-color: var(--warn); background: rgba(245,166,35,0.12); font-weight: 600; }
+  .state-pr_review { color: var(--accent); border-color: var(--accent); background: rgba(106,162,255,0.10); }
+  .state-pr_open   { color: var(--ok); border-color: var(--ok); background: rgba(78,185,96,0.10); }
+
+  /* Ticket expanded detail */
+  .ticket .detail {
+    padding: 12px 16px 14px;
+    border-top: 1px solid var(--border);
+    background: rgba(0,0,0,0.18);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    font-size: 12px;
+  }
+  .detail-block .label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .detail-block .value { color: var(--text); }
+  .plan-items {
+    list-style: none; padding: 0; margin: 4px 0 0;
+    font-size: 12px;
+  }
+  .plan-items li {
+    padding: 2px 0;
+    color: var(--text-dim);
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+  .plan-items .mark { font-family: "SF Mono", monospace; font-size: 12.5px; min-width: 14px; }
+  .plan-items .done .mark { color: var(--ok); }
+  .plan-items .progress .mark { color: var(--warn); }
+  .plan-items .pending .mark { color: var(--text-faint); }
+  .plan-items .done .text { color: var(--text-dim); text-decoration: line-through; opacity: 0.7; }
+  .plan-items .progress .text { color: var(--text); }
+  .plan-items .pending .text { color: var(--text-faint); }
+
+  /* Acceptance results inline */
+  .acceptance {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    color: var(--text-dim);
+  }
+  .acceptance.green { color: var(--ok); }
+  .acceptance.red { color: var(--bad); }
+
+  /* Deploy recommendation */
+  .deploy-rec {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .deploy-rec.deploy {
+    background: rgba(106,162,255,0.10);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .deploy-rec.no-deploy {
+    background: var(--panel-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border-2);
+  }
+  .deploy-rec.needs-review {
+    background: rgba(245,166,35,0.10);
+    color: var(--warn);
+    border: 1px solid var(--warn);
+  }
+  .rec-reason { color: var(--text-dim); font-weight: 400; }
+
+  /* Action buttons */
+  .actions {
+    display: flex; gap: 8px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    color: var(--text);
+    padding: 7px 14px;
+    font-size: 12.5px;
+    font-weight: 500;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .btn:hover { background: var(--border-2); }
+  .btn-primary {
+    background: var(--accent);
+    color: #0a0f1c;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .btn-primary:hover { background: #87b6ff; }
+  .btn-warn {
+    background: var(--warn);
+    color: #1c1306;
+    border-color: var(--warn);
+    font-weight: 600;
+  }
+  .btn-danger {
+    color: var(--bad);
+    border-color: var(--bad-soft);
+  }
+  .btn-danger:hover { background: var(--bad-soft); }
+  .btn-takeover {
+    background: transparent;
+    color: var(--cyan);
+    border-color: var(--cyan);
+  }
+  .btn-takeover:hover { background: rgba(92,208,208,0.10); }
+
+  /* Compact waiting row */
+  .ticket.compact .row { padding: 10px 16px; }
+  .ticket.compact .summary-sub { display: none; }
+
+  /* Last-updated relative ago */
+  .ago { color: var(--text-faint); font-size: 11.5px; }
+
+  /* Empty state */
+  .empty {
+    padding: 36px 16px;
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 13px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+
+  /* Footer hint */
+  .footer-hint {
+    text-align: center;
+    margin-top: 36px;
+    padding: 12px;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span>Ranch</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="topbar-right">
+      <span class="meta" id="clock"></span>
+      <span class="meta">●  4 hands running</span>
+    </div>
+  </div>
+
+  <div class="page" id="page"></div>
+
+  <div class="footer-hint">
+    Prototype. Click between tabs above. State is mocked from a realistic ranch.db.
+  </div>
+
+<script>
+// ─── Mock data: realistic-shaped tickets across 4 hands ─────────────
+// This is what the live console would derive from SQLite via IPC.
+const HANDS = {
+  max: {
+    label: "max",
+    status: "running",
+    project: "ECD",
+    poll_seconds: 30,
+    tickets: [
+      {
+        key: "ECD-2087", summary: "Restore post-scrape dedup dispatch",
+        ranch_state: "parked", checkpoint: "pre_push",
+        just_did: "Acceptance 4/4 green; reviewed diff, ready to push.",
+        ago: "2m",
+        plan: [
+          {status: "done", text: "Read scrape dispatch flow"},
+          {status: "done", text: "Add post-dedup dispatch step"},
+          {status: "done", text: "Wire onComplete callback"},
+          {status: "done", text: "Pytest + curl smoke"},
+        ],
+        acceptance: {pass: 4, total: 4},
+        deploy_rec: "deploy", deploy_reason: "acceptance has http check + scraper integration",
+        files_touched: 6,
+        attention: true,
+      },
+      {
+        key: "ECD-2073", summary: "Performance deploy — Celery worker scaling",
+        ranch_state: "parked", checkpoint: "plan_ready",
+        just_did: "Plan drafted from epic + sister tickets. 5 steps, complexity M.",
+        ago: "12m",
+        plan: [
+          {status: "pending", text: "Inventory worker queue assignments"},
+          {status: "pending", text: "Identify hot queues from prod metrics"},
+          {status: "pending", text: "Update Procfile worker scaling"},
+          {status: "pending", text: "Add observability hooks"},
+          {status: "pending", text: "pytest + smoke against staging"},
+        ],
+        deploy_rec: "deploy", deploy_reason: "needs release-phase validation in realistic Procfile",
+        attention: true,
+      },
+      {
+        key: "ECD-1880", summary: "Add audit log for migration runs",
+        ranch_state: "coding",
+        just_did: "Wrote failing test for the audit log writer.",
+        ago: "1m",
+        plan: [
+          {status: "done", text: "Inspect existing migration hook"},
+          {status: "done", text: "Failing test for audit writer"},
+          {status: "progress", text: "Implement AuditLogWriter"},
+          {status: "pending", text: "Verify with run_acceptance"},
+        ],
+        attention: false,
+      },
+      {
+        key: "ECD-1762", summary: "Citation export — DOI formatting",
+        ranch_state: "pr_review", checkpoint: null,
+        just_did: "PR open; 2 new review comments arrived 4m ago.",
+        ago: "4m",
+        pr_id: 1834,
+        comments: 2,
+        attention: true,
+      },
+      {
+        key: "ECD-1623", summary: "Scrape worker timeout handling",
+        ranch_state: "pr_open",
+        just_did: "PR opened, CI passed (12m). No reviewers assigned yet.",
+        ago: "44m",
+        pr_id: 1801, ci: "passed",
+        attention: false,
+      },
+    ],
+  },
+  jeffy: {
+    label: "jeffy",
+    status: "running",
+    project: "ECD",
+    poll_seconds: 30,
+    tickets: [
+      {
+        key: "ECD-1853", summary: "Lit-reviews migration merge fix",
+        ranch_state: "testing",
+        just_did: "Implementation complete; running acceptance now.",
+        ago: "30s",
+        plan: [
+          {status: "done", text: "Reproduce the migration conflict"},
+          {status: "done", text: "Write rollback test"},
+          {status: "done", text: "Implement merge migration"},
+          {status: "progress", text: "Run acceptance"},
+        ],
+        attention: false,
+      },
+      {
+        key: "ECD-1720", summary: "Article preview pagination",
+        ranch_state: "pr_review",
+        just_did: "PR awaiting review for 3 hours; no comments yet.",
+        ago: "3h",
+        pr_id: 1740, ci: "passed",
+        attention: false,
+      },
+    ],
+  },
+  arnold: {
+    label: "arnold",
+    status: "running",
+    project: "ECD",
+    poll_seconds: 30,
+    tickets: [
+      {
+        key: "ECD-2087", summary: "Restore post-scrape dedup dispatch (sister of max's)",
+        ranch_state: "parked", checkpoint: "plan_ready",
+        just_did: "Proposal drafted; NOTE: max has the same ticket — operator may want to drop one.",
+        ago: "8m",
+        plan: [
+          {status: "pending", text: "Read the same code max read"},
+          {status: "pending", text: "..."},
+        ],
+        deploy_rec: "needs-review", deploy_reason: "duplicate work with max's ECD-2087",
+        attention: true,
+      },
+      {
+        key: "ECD-1644", summary: "MAUDE adverse-event ingester rate limit",
+        ranch_state: "parked", checkpoint: "pre_push",
+        just_did: "Acceptance 3/3 green; diff is small and contained.",
+        ago: "22m",
+        plan: [
+          {status: "done", text: "Reproduce the rate-limit hit"},
+          {status: "done", text: "Add exponential backoff"},
+          {status: "done", text: "pytest + curl smoke"},
+        ],
+        acceptance: {pass: 3, total: 3},
+        deploy_rec: "no-deploy", deploy_reason: "all acceptance is unit_test + script (localhost)",
+        attention: true,
+      },
+      {
+        key: "ECD-1410", summary: "Worker spatial pre-parse — index rebuild",
+        ranch_state: "pr_review",
+        just_did: "1 new review comment 6m ago — looks like a push-back on the scope.",
+        ago: "6m",
+        pr_id: 1620, comments: 1,
+        attention: true,
+      },
+    ],
+  },
+  kesha: {
+    label: "kesha",
+    status: "idle",
+    project: "ECD",
+    poll_seconds: 30,
+    tickets: [
+      {
+        key: "ECD-1410", summary: "PubMed callback signing v2",
+        ranch_state: "pr_review",
+        just_did: "PR open, no new activity since merge of upstream develop.",
+        ago: "2d",
+        pr_id: 1580,
+        attention: false,
+      },
+    ],
+  },
+};
+
+// ─── Tab strip ───────────────────────────────────────────────────────
+function renderTabs() {
+  const el = document.getElementById("tabs");
+  el.innerHTML = "";
+  Object.entries(HANDS).forEach(([k, h]) => {
+    const needsYouCount = h.tickets.filter(t => t.attention).length;
+    const tab = document.createElement("div");
+    tab.className = "tab" + (k === current ? " active" : "");
+    tab.dataset.hand = k;
+    tab.innerHTML = `
+      <span class="hand-status ${h.status === 'idle' ? 'idle' : (h.status === 'stopped' ? 'stopped' : '')}"></span>
+      <span class="hand-name">${h.label}</span>
+      <span class="badge ${needsYouCount === 0 ? 'zero' : 'attention'}">${needsYouCount === 0 ? '0' : needsYouCount}</span>
+    `;
+    tab.onclick = () => { current = k; render(); };
+    el.appendChild(tab);
+  });
+}
+
+// ─── Hand detail view ────────────────────────────────────────────────
+function renderHand() {
+  const hand = HANDS[current];
+  const page = document.getElementById("page");
+
+  const needsYou = hand.tickets.filter(t => t.attention);
+  const inFlight = hand.tickets.filter(t => !t.attention && (t.ranch_state === "coding" || t.ranch_state === "testing" || t.ranch_state === "planning"));
+  const waiting = hand.tickets.filter(t => !t.attention && (t.ranch_state === "pr_review" || t.ranch_state === "pr_open"));
+
+  page.innerHTML = `
+    <div class="hand-header">
+      <div>
+        <h1>${hand.label}</h1>
+        <div class="hand-meta">
+          ${hand.tickets.length} ticket${hand.tickets.length === 1 ? '' : 's'} in flight · polling every ${hand.poll_seconds}s · status: ${hand.status}
+        </div>
+      </div>
+      <div class="hand-actions">
+        <button class="btn-mini">⋮ menu</button>
+        <button class="btn-mini">⏸ pause hand</button>
+        <button class="btn-mini">+ start new ticket</button>
+      </div>
+    </div>
+
+    ${renderGroup('needs-you', '⚠ Needs you', needsYou)}
+    ${renderGroup('in-flight', '▸ In flight', inFlight)}
+    ${renderGroup('waiting', '◌ Waiting on PR / CI', waiting)}
+  `;
+}
+
+function renderGroup(cls, title, tickets) {
+  if (tickets.length === 0) {
+    if (cls === 'needs-you') return '';  // hide empty needs-you to reduce visual noise when caught up
+    return `
+      <div class="group ${cls}">
+        <div class="group-header">${title} <span class="group-count">0</span></div>
+        <div class="empty">nothing here right now</div>
+      </div>`;
+  }
+  return `
+    <div class="group ${cls}">
+      <div class="group-header">${title} <span class="group-count">${tickets.length}</span></div>
+      ${tickets.map(renderTicket).join('')}
+    </div>`;
+}
+
+function statePill(t) {
+  if (t.checkpoint === "pre_push") return '<span class="state-pill state-parked">parked · pre_push</span>';
+  if (t.checkpoint === "plan_ready") return '<span class="state-pill state-parked">parked · plan_ready</span>';
+  if (t.ranch_state === "coding") return '<span class="state-pill state-coding">▸ coding</span>';
+  if (t.ranch_state === "testing") return '<span class="state-pill state-testing">▸ testing</span>';
+  if (t.ranch_state === "planning") return '<span class="state-pill state-planning">▸ planning</span>';
+  if (t.ranch_state === "pr_review") return `<span class="state-pill state-pr_review">pr_review · ${t.comments || 0} new</span>`;
+  if (t.ranch_state === "pr_open") return `<span class="state-pill state-pr_open">pr_open · ci ${t.ci || '?'}</span>`;
+  return `<span class="state-pill">${t.ranch_state}</span>`;
+}
+
+function renderTicket(t) {
+  const planHtml = t.plan ? `
+    <div class="detail-block">
+      <div class="label">Plan</div>
+      <ul class="plan-items">
+        ${t.plan.map(s => {
+          const mark = s.status === 'done' ? '✓' : s.status === 'progress' ? '▸' : '·';
+          return `<li class="${s.status}"><span class="mark">${mark}</span><span class="text">${s.text}</span></li>`;
+        }).join('')}
+      </ul>
+    </div>` : '';
+
+  const acceptHtml = t.acceptance ? `
+    <div class="detail-block">
+      <div class="label">Acceptance</div>
+      <div class="acceptance ${t.acceptance.pass === t.acceptance.total ? 'green' : 'red'}">
+        ${t.acceptance.pass}/${t.acceptance.total} passed
+      </div>
+    </div>` : '';
+
+  const deployHtml = t.deploy_rec ? `
+    <div class="detail-block" style="grid-column: 1 / -1;">
+      <div class="label">Deploy recommendation</div>
+      <span class="deploy-rec ${t.deploy_rec}">
+        ${t.deploy_rec === 'deploy' ? 'DEPLOY recommended' : t.deploy_rec === 'no-deploy' ? 'NO DEPLOY needed' : 'NEEDS REVIEW'}
+        <span class="rec-reason">— ${t.deploy_reason}</span>
+      </span>
+    </div>` : '';
+
+  const actions = renderActions(t);
+
+  // Decide whether to show the detail block (expanded for "needs you" tickets, collapsed for in-flight)
+  const showDetail = t.attention || t.ranch_state === 'coding' || t.ranch_state === 'testing';
+  const detailHtml = showDetail && (planHtml || acceptHtml || deployHtml) ? `
+    <div class="detail">
+      ${planHtml}
+      ${acceptHtml}
+      ${deployHtml}
+    </div>` : '';
+
+  return `
+    <div class="ticket ${t.attention ? 'attention' : ''}">
+      <div class="row">
+        <div class="key">${t.key}</div>
+        <div>
+          <div class="summary">${t.summary}</div>
+          <div class="summary-sub">${t.just_did} <span class="ago">· ${t.ago}</span></div>
+        </div>
+        <div>${statePill(t)}</div>
+      </div>
+      ${detailHtml}
+      ${actions ? `<div class="row bordered"><div></div><div></div><div class="actions">${actions}</div></div>` : ''}
+    </div>`;
+}
+
+function renderActions(t) {
+  if (t.checkpoint === "pre_push") {
+    const primary = t.deploy_rec === 'deploy'
+      ? `<button class="btn btn-primary">Approve + Deploy</button>`
+      : `<button class="btn btn-primary">Approve, skip deploy</button>`;
+    return `
+      ${primary}
+      <button class="btn btn-danger">Reject</button>
+      <button class="btn btn-takeover">⤵ Drop into chat</button>
+    `;
+  }
+  if (t.checkpoint === "plan_ready") {
+    return `
+      <button class="btn btn-primary">Approve plan</button>
+      <button class="btn">View full plan</button>
+      <button class="btn btn-danger">Reject</button>
+      <button class="btn btn-takeover">⤵ Drop into chat</button>
+    `;
+  }
+  if (t.ranch_state === "pr_review" && t.attention) {
+    return `
+      <button class="btn btn-primary">View comments + auto-respond</button>
+      <button class="btn">Take over manually</button>
+      <button class="btn btn-takeover">⤵ Drop into chat</button>
+    `;
+  }
+  if (t.ranch_state === "coding" || t.ranch_state === "testing") {
+    return `<button class="btn btn-takeover">⤵ Drop into chat</button>`;
+  }
+  return '';
+}
+
+// ─── Render loop ─────────────────────────────────────────────────────
+let current = "max";
+function render() {
+  renderTabs();
+  renderHand();
+}
+
+function tick() {
+  const el = document.getElementById("clock");
+  if (el) el.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+}
+
+render();
+tick(); setInterval(tick, 30_000);
+</script>
+</body>
+</html>
