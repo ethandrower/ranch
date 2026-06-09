@@ -613,6 +613,99 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.group("pr")
+def pr_group():
+    """PR draft + open (Phase H10)."""
+
+
+@pr_group.command("draft")
+@click.argument("run_id", type=int)
+@click.option("--figma", default=None, help="Optional figma URL to link.")
+@click.option("--jira-base", default=None, help="Jira base URL for linking the ticket (e.g. https://yourorg.atlassian.net).")
+@click.option("--out", default=None, type=click.Path(), help="Write the body to a file instead of stdout.")
+def pr_draft_cmd(run_id, figma, jira_base, out):
+    """Render a PR title + body for a completed run, no remote calls."""
+    from .pr_draft import render_draft
+
+    try:
+        draft, _ = render_draft(run_id, figma_url=figma, jira_base_url=jira_base)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    if out:
+        from pathlib import Path as _Path
+        _Path(out).write_text(f"# {draft.title}\n\n{draft.body}")
+        console.print(f"[dim]Wrote draft → {out}[/dim]")
+        return
+
+    console.print(f"[bold cyan]Title:[/bold cyan] {draft.title}\n")
+    # Body is markdown — emit with click.echo so Rich doesn't mangle [x] / [kind] tags
+    click.echo(draft.body)
+
+
+@pr_group.command("open")
+@click.argument("run_id", type=int)
+@click.option("--figma", default=None, help="Optional figma URL to link.")
+@click.option("--jira-base", default=None, help="Jira base URL for linking the ticket.")
+@click.option("--ready", is_flag=True, help="Open as ready-for-review instead of draft.")
+@click.option("--base-branch", default=None, help="Override the PR base branch.")
+@click.option("--platform", default=None, type=click.Choice(["bb", "gh"]), help="Force a backend. Default: auto-detect via .git/config.")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+def pr_open_cmd(run_id, figma, jira_base, ready, base_branch, platform, yes):
+    """Actually fire `bb pr create` (or gh) using the rendered draft."""
+    from pathlib import Path as _Path
+    from .pr_draft import render_draft
+    from .runner.pr_backend import (
+        PRBackendError, detect_platform, get_backend,
+    )
+
+    try:
+        draft, artifacts = render_draft(run_id, figma_url=figma, jira_base_url=jira_base)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    cwd = _Path(artifacts.cwd)
+    pf = platform or detect_platform(cwd)
+    if not pf:
+        console.print("[red]Could not detect a PR platform (bb or gh) for this worktree.[/red]")
+        raise click.Abort()
+
+    console.print(f"[bold cyan]Title:[/bold cyan] {draft.title}\n")
+    # Body is markdown — emit raw to avoid Rich markup parsing
+    click.echo(draft.body)
+    console.print()
+    console.print(f"[dim]Backend: {pf}  ·  draft: {not ready}  ·  cwd: {cwd}[/dim]")
+
+    if not yes:
+        if not click.confirm("Open this PR?", default=False):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+    backend = get_backend(pf)
+    try:
+        pr_id, url = backend.create_pr(
+            title=draft.title, body=draft.body, cwd=cwd,
+            draft=not ready, base_branch=base_branch,
+        )
+    except PRBackendError as e:
+        console.print(f"[red]{pf} pr create failed:[/red] {e}")
+        raise click.Abort()
+
+    # Persist the PR linkage to the Run row so the existing poll-pr / respond-pr
+    # commands can find this PR without re-discovering by branch.
+    from .models import Run
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=run_id).one_or_none()
+        if run:
+            run.pr_id = pr_id
+            run.pr_platform = pf
+            run.pr_url = url
+
+    console.print(f"[green]Opened PR #{pr_id}[/green]  {url}")
+
+
 @cli.group("hand")
 def hand_group():
     """Ranch hand — virtual engineer daemon (Phase H11)."""
