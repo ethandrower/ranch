@@ -384,7 +384,7 @@ The "polling now, webhooks later" call: each agent's pilot daemon polls every ~3
 - H1 (#71) — Dossier schema + `record_state` MCP tool [PR #82]
 - H2 (#72) — Dossier persistence + console rendering [H2a backend in flight; H2b console rendering follows]
 - H3 (#73) — Interactive takeover (pause → `claude --resume` → orchestrated resume)
-- H4 (#74) — `ranch triage` — rank assigned Jira tickets
+- H4 (#74) — `ranch triage` — rank assigned Jira tickets [in flight]
 - H5 (#75) — `ranch scope <ticket>` — context bundle
 - H6 (#76) — `ranch propose <ticket>` — bounded plan + acceptance criteria
 - H7 (#77) — `ranch design <ticket>` — figma frame discovery

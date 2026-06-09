@@ -599,6 +599,93 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.command("triage")
+@click.option("--agent", default=None, help="Exclude tickets already in flight for this agent (default: anyone).")
+@click.option("--project", default=None, help="Filter to a single Jira project key (e.g. ECD).")
+@click.option("--top", "top_n", default=10, type=int, help="Show only the top N candidates.")
+@click.option("--json", "as_json", is_flag=True, help="Emit raw JSON suitable for scripting (e.g. by the ranch hand scheduler).")
+def triage_cmd(agent, project, top_n, as_json):
+    """Rank assigned Jira tickets by viability (Phase H4)."""
+    import json as _json
+    from .triage import (
+        JiraClient,
+        JiraConfig,
+        JiraConfigError,
+        in_flight_ticket_keys_for_agent,
+        triage,
+    )
+
+    try:
+        cfg = JiraConfig.load()
+    except JiraConfigError as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    in_flight = in_flight_ticket_keys_for_agent(agent)
+
+    try:
+        with JiraClient(cfg) as client:
+            tickets = client.list_assigned_to_me(project=project)
+    except Exception as e:
+        console.print(f"[red]Jira request failed:[/red] {e}")
+        raise click.Abort()
+
+    ranked = triage(tickets, in_flight)
+    top = ranked[:top_n]
+
+    if as_json:
+        out = [
+            {
+                "key": t.key,
+                "summary": t.summary,
+                "status": t.status,
+                "priority": t.priority,
+                "has_figma_link": t.has_figma_link,
+                "score": {
+                    "total": s.total,
+                    "status": s.status,
+                    "design_present": s.design_present,
+                    "ac_clarity": s.ac_clarity,
+                    "priority": s.priority,
+                    "age": s.age,
+                },
+            }
+            for t, s in top
+        ]
+        click.echo(_json.dumps(out, indent=2))
+        return
+
+    if not top:
+        console.print("[yellow]No viable tickets found.[/yellow]")
+        if in_flight:
+            console.print(f"[dim]({len(in_flight)} ticket(s) excluded as already in flight: {', '.join(sorted(in_flight))})[/dim]")
+        return
+
+    table = Table(title=f"Triage — top {len(top)} of {len(ranked)}", show_header=True)
+    table.add_column("Rank", style="dim", width=4)
+    table.add_column("Key", style="bold cyan")
+    table.add_column("Status")
+    table.add_column("Pri", width=8)
+    table.add_column("Figma", justify="center", width=5)
+    table.add_column("AC", justify="center", width=4)
+    table.add_column("Score", justify="right", width=6)
+    table.add_column("Summary")
+    for i, (t, s) in enumerate(top, 1):
+        table.add_row(
+            str(i),
+            t.key,
+            t.status,
+            t.priority or "—",
+            "✓" if t.has_figma_link else "—",
+            "✓" if s.ac_clarity > 0 else "—",
+            f"{s.total:.0f}",
+            t.summary[:60] + ("…" if len(t.summary) > 60 else ""),
+        )
+    console.print(table)
+    if in_flight:
+        console.print(f"[dim]Excluded {len(in_flight)} ticket(s) already in flight: {', '.join(sorted(in_flight))}[/dim]")
+
+
 @cli.command("fleet")
 @click.option("--all", "show_all", is_flag=True, help="Include completed/stopped/error runs.")
 @click.option("--watch", "watch", is_flag=True, help="Refresh in place every --interval seconds.")
