@@ -613,6 +613,104 @@ def dossier_cmd(run_id, as_json, watch, interval):
             pass
 
 
+@cli.command("deploy")
+@click.argument("run_id", type=int)
+@click.option("--branch", default=None, help="Source branch to push (defaults to Run.branch_name).")
+@click.option("--force", is_flag=True, help="Pass --force to git push (fine on per-hand dev envs).")
+@click.option("--health-timeout", default=180.0, type=float, help="Seconds to wait for the URL to respond after push.")
+@click.option("--yes", "-y", "skip_confirm", is_flag=True, help="Skip the 'will overwrite X' confirmation prompt.")
+def deploy_cmd(run_id, branch, force, health_timeout, skip_confirm):
+    """Push the run's branch to its hand's Dokku staging app.
+
+    Phase H9. Each ranch hand has its own staging env (e.g. max →
+    dev-max at https://max.staging.citemed.com). This command is the
+    explicit, operator-driven deploy — auto-fire from the hand's poll
+    loop is deliberately not part of the design (memory-tight box +
+    most tickets don't need a staging deploy to validate).
+
+    Before pushing, the command inspects what's currently on the
+    remote so you don't silently overwrite yesterday's manual testing.
+    Pass --yes to skip the confirmation.
+
+    Config in ~/.ranch/config.toml under [dokku] + [agents.<name>.dokku];
+    defaults match the citemed staging convention exactly.
+    """
+    from pathlib import Path as _Path
+    from .deploy import deploy_run, inspect_current_deploy, load_deploy_config
+    from .models import Run
+
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=run_id).one_or_none()
+        if not run:
+            console.print(f"[red]Run #{run_id} not found[/red]")
+            raise click.Abort()
+        agent = run.agent
+        cwd = _Path(run.cwd) if run.cwd else None
+        source_branch = branch or run.branch_name
+
+    if not cwd or not source_branch:
+        console.print(f"[red]Run #{run_id} missing cwd or branch_name — set --branch.[/red]")
+        raise click.Abort()
+
+    try:
+        cfg = load_deploy_config(agent)
+    except Exception as e:
+        console.print(f"[red]config error: {e}[/red]")
+        raise click.Abort()
+
+    console.print(f"[cyan]Inspecting {cfg.app} on {cfg.host}...[/cyan]")
+    state = inspect_current_deploy(cwd, cfg.remote, source_branch)
+
+    # Render the "you are about to overwrite X" preview
+    console.print(f"[bold]Hand:[/bold]   {agent}")
+    console.print(f"[bold]Remote:[/bold] {cfg.remote} ({cfg.host}:{cfg.app})")
+    console.print(f"[bold]URL:[/bold]    {cfg.url}")
+    console.print(f"[bold]Branch:[/bold] {source_branch}")
+    if state.local_head_sha:
+        console.print(f"[bold]Will push:[/bold] {state.local_head_sha[:12]}")
+    if state.deployed_sha:
+        if state.deployed_sha == state.local_head_sha:
+            console.print(f"[dim]Currently on remote main: {state.deployed_sha[:12]} (no change — redeploy)[/dim]")
+        else:
+            ahead = f"{state.commits_ahead} commits ahead" if state.commits_ahead is not None else "diverged"
+            console.print(f"[yellow]Will overwrite remote main: {state.deployed_sha[:12]} ({ahead})[/yellow]")
+    elif state.error:
+        console.print(f"[dim]Could not query current remote state ({state.error}) — proceeding without preview[/dim]")
+
+    if not skip_confirm:
+        if not click.confirm("Continue with the deploy?", default=False):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+    console.print(f"[cyan]Pushing + health-checking...[/cyan]")
+    result = deploy_run(
+        run_id,
+        source_branch=branch,
+        force=force,
+        health_timeout_seconds=health_timeout,
+    )
+
+    if result.url:
+        console.print(f"[dim]URL: {result.url}[/dim]")
+    console.print(f"[dim]Elapsed: {result.elapsed_seconds:.1f}s[/dim]")
+    if result.push_output:
+        lines = result.push_output.splitlines()
+        tail = "\n".join(lines[-10:]) if len(lines) > 10 else result.push_output
+        console.print("[dim]push (tail):[/dim]")
+        console.print(tail)
+
+    if result.ok:
+        console.print(f"[green]✓ Deploy live at {result.url}[/green]")
+        return
+
+    console.print(f"[red]✗ Deploy failed[/red]")
+    if result.reason:
+        console.print(f"[red]  reason: {result.reason}[/red]")
+    if result.health and result.health.error:
+        console.print(f"[red]  health: {result.health.error}[/red]")
+    raise click.Abort()
+
+
 @cli.group("pr")
 def pr_group():
     """PR draft + open (Phase H10)."""
