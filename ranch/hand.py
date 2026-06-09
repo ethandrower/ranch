@@ -336,12 +336,15 @@ class RanchHand:
         # H20 — PR review polling cadence + response budget
         pr_poll_interval_seconds: float = 120.0,
         pr_response_budget_seconds: float = 600.0,
+        # H20 P2 — CI status polling cadence (independent from PR review cadence)
+        ci_poll_interval_seconds: float = 60.0,
         triage_fn: Optional[Callable[[str | None], list[str]]] = None,
         scope_fn: Optional[Callable[[str], None]] = None,
         propose_fn: Optional[Callable[[str], Awaitable[None]]] = None,
         execute_fn: Optional[Callable[[_ApprovedPropose], Awaitable[None]]] = None,
         pr_poll_fn: Optional[Callable[[int], "object"]] = None,
         respond_pr_fn: Optional[Callable[[int], Awaitable[None]]] = None,
+        ci_poll_fn: Optional[Callable[[int], "object"]] = None,
     ):
         self.name = name
         self.cwd = cwd
@@ -351,6 +354,7 @@ class RanchHand:
         self.execute_budget_seconds = execute_budget_seconds
         self.pr_poll_interval_seconds = pr_poll_interval_seconds
         self.pr_response_budget_seconds = pr_response_budget_seconds
+        self.ci_poll_interval_seconds = ci_poll_interval_seconds
 
         # Injection seams for tests + offline mode. Default impls hit Jira /
         # invoke H5+H6; the validation harness injects synthetic versions.
@@ -359,6 +363,7 @@ class RanchHand:
         self.propose_fn = propose_fn or self._default_propose
         self.execute_fn = execute_fn or self._default_execute
         self.pr_poll_fn = pr_poll_fn or self._default_pr_poll
+        self.ci_poll_fn = ci_poll_fn or self._default_ci_poll
         self.respond_pr_fn = respond_pr_fn or self._default_respond_pr
 
         self.stop_requested = False
@@ -443,6 +448,52 @@ class RanchHand:
         """H20: synchronously poll Bitbucket/GitHub for new review comments."""
         from .pr_loop import poll_pr_for_run
         return poll_pr_for_run(run_id)
+
+    def _default_ci_poll(self, run_id: int):
+        """H20 P2: synchronously poll CI status for an in-flight PR."""
+        from .ci_loop import poll_ci_for_run
+        return poll_ci_for_run(run_id)
+
+    async def _check_ci_unblocks(self) -> bool:
+        """H20 P2: for every PR-attached run, check CI status; on flip emit
+        a dossier event so the operator sees it in `ranch fleet --watch`.
+
+        Returns True when a flip was emitted (used by the main loop to skip
+        the rest of the cycle and re-evaluate next tick).
+
+        Cadence — independent module-level last-check timestamp on Run row
+        could be added later; for now we rely on the underlying ci_loop's
+        tolerance for being called frequently and dedupe via the
+        `previous_status != new_status` check inside poll_ci_for_run.
+        """
+        from .ci_loop import emit_ci_flip_dossier, runs_pending_ci_check
+
+        candidates = runs_pending_ci_check(agent=self.name)
+        if not candidates:
+            return False
+        for c in candidates:
+            try:
+                result = self.ci_poll_fn(c.run_id)
+            except Exception as e:
+                console.print(
+                    f"[red]{self.name}: CI poll failed for run #{c.run_id} — {e}[/red]"
+                )
+                continue
+            if not getattr(result, "flipped", False):
+                continue
+            status = getattr(result, "status", "?")
+            console.print(
+                f"[bold yellow]{self.name}: CI {status} on PR #{c.pr_id} "
+                f"(run #{c.run_id})[/bold yellow]"
+            )
+            try:
+                emit_ci_flip_dossier(c.run_id, result)
+            except Exception as e:
+                console.print(
+                    f"[red]{self.name}: failed to emit CI dossier — {e}[/red]"
+                )
+            return True
+        return False
 
     async def _default_respond_pr(self, run_id: int) -> None:
         """H20: resume the SDK session with pending review comments as the brief."""
@@ -574,7 +625,15 @@ class RanchHand:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                # 4. Recently parked & still within the operator-review window?
+                # 4. H20 P2: any in-flight PR's CI status flipped? → emit
+                #    dossier event so the operator sees green/red without
+                #    scrolling logs.
+                ci_event = await self._check_ci_unblocks()
+                if ci_event:
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
+                # 5. Recently parked & still within the operator-review window?
                 parked = _last_parked_run_for(self.name)
                 if parked:
                     self._maybe_log_idle(

@@ -536,6 +536,26 @@ def _render_dossier_panel(run: dict, payload: dict | None):
             if step.get("notes"):
                 body.append(f"      {step['notes']}\n", style="dim")
 
+    # H9 P2: surface the agent's deploy recommendation prominently when present
+    rec = payload.get("recommended_action")
+    if rec:
+        rec_style = {
+            "deploy": "bold cyan",
+            "no_deploy": "dim",
+            "needs_review": "bold yellow",
+        }.get(rec, "white")
+        rec_label = {
+            "deploy": "DEPLOY recommended",
+            "no_deploy": "NO DEPLOY needed",
+            "needs_review": "NEEDS REVIEW",
+        }.get(rec, rec)
+        body.append("\n", style="bold")
+        body.append(f"{rec_label}", style=rec_style)
+        reason = payload.get("recommendation_reason")
+        if reason:
+            body.append(f" — {reason}", style="dim")
+        body.append("\n")
+
     options = payload.get("options") or []
     if options:
         body.append("\nOptions\n", style="bold")

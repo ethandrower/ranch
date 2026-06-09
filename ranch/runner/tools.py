@@ -100,6 +100,21 @@ STATE_INPUT_SCHEMA = {
                 "non-trivial; omit for routine transitions."
             ),
         },
+        "recommended_action": {
+            "type": "string",
+            "enum": ["deploy", "no_deploy", "needs_review"],
+            "description": (
+                "H9 Phase 2 — at pre_push, recommend whether this change needs a "
+                "staging deploy before review. 'deploy' if any acceptance check "
+                "requires a public URL (http / browser); 'no_deploy' if all checks "
+                "are localhost-only (unit_test / script); 'needs_review' if unsure. "
+                "Pair with `recommendation_reason`."
+            ),
+        },
+        "recommendation_reason": {
+            "type": "string",
+            "description": "One-line rationale for `recommended_action`, shown to the operator.",
+        },
         "acceptance": {
             "type": "array",
             "description": (

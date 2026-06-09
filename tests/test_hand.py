@@ -677,6 +677,62 @@ async def test_check_pr_review_unblocks_swallows_poll_errors(tmp_path):
     assert fired is False
 
 
+# ─── H20 P2: CI status unblock detection ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_check_ci_unblocks_emits_dossier_when_flipped(tmp_path):
+    """When ci_poll_fn returns flipped=True, the hand calls emit_ci_flip_dossier."""
+    from ranch.ci_loop import CIPollResult
+    rid = _seed_parked_pr_run()
+    poll_calls = []
+    def fake_poll(run_id: int):
+        poll_calls.append(run_id)
+        return CIPollResult(
+            ok=True, pr_id="42", commit_sha="abc",
+            status="passed", flipped=True, previous_status="running",
+        )
+
+    hand = RanchHand("max", tmp_path, ci_poll_fn=fake_poll)
+    fired = await hand._check_ci_unblocks()
+    assert fired is True
+    assert poll_calls == [rid]
+    # Dossier row written
+    with db_session() as db:
+        rows = db.query(Dossier).filter_by(run_id=rid).all()
+    assert any("CI passed" in (json.loads(r.payload_json).get("just_did", "")) for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_check_ci_unblocks_returns_false_when_no_flip(tmp_path):
+    from ranch.ci_loop import CIPollResult
+    _seed_parked_pr_run()
+    def fake_poll(run_id: int):
+        return CIPollResult(ok=True, pr_id="42", status="running", flipped=False)
+
+    hand = RanchHand("max", tmp_path, ci_poll_fn=fake_poll)
+    fired = await hand._check_ci_unblocks()
+    assert fired is False
+
+
+@pytest.mark.asyncio
+async def test_check_ci_unblocks_handles_no_candidates(tmp_path):
+    init_db()
+    hand = RanchHand("max", tmp_path)
+    fired = await hand._check_ci_unblocks()
+    assert fired is False
+
+
+@pytest.mark.asyncio
+async def test_check_ci_unblocks_swallows_poll_errors(tmp_path):
+    _seed_parked_pr_run()
+    def fake_poll(run_id: int):
+        raise RuntimeError("bb network down")
+    hand = RanchHand("max", tmp_path, ci_poll_fn=fake_poll)
+    fired = await hand._check_ci_unblocks()
+    assert fired is False
+
+
 @pytest.mark.asyncio
 async def test_hand_main_loop_fires_pr_response_before_triage(tmp_path):
     """Integration: main loop reaches _check_pr_review_unblocks step,
