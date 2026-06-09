@@ -97,6 +97,27 @@ You may also pass inline `checks` to `run_acceptance` to verify ad-hoc things
 during development — but the canonical run after code-complete should be
 argument-free so it uses the propose-defined contract.
 
+## Staging deploy recommendation (H9 P2)
+
+When you reach pre_push, set `recommended_action` on your dossier based
+on what your acceptance contract actually requires:
+
+- **`"deploy"`** — if any acceptance check is `http` (probes a public URL)
+  or `browser` (Playwright against a deployed page), OR the change touches
+  URL routing / auth flow / migrations that need release-phase validation
+  in a realistic build. Set `recommendation_reason` to the specific check
+  or concern.
+- **`"no_deploy"`** — if all acceptance is `unit_test` + `script` against
+  localhost AND the change is contained logic / utilities / pure refactor.
+  Don't burn the staging box for nothing.
+- **`"needs_review"`** — when you genuinely don't know (e.g. broad
+  blast-radius change the operator should think about).
+
+The operator reads this on the parked pre_push dossier and decides
+whether to fire `ranch deploy <run_id>`. Be honest — over-recommending
+causes memory pressure on a shared staging box; under-recommending means
+the reviewer can't actually exercise the change end-to-end.
+
 ## Rules
 
 - Never push, open a PR, or create a branch without a `pre_push` approval.

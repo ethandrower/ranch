@@ -225,6 +225,51 @@ def test_dossier_option_requires_both_fields():
         DossierOption(label="approve")  # missing description
 
 
+# ─── H9 P2: recommended_action ────────────────────────────────────
+
+
+def test_record_state_recommended_action_defaults_none():
+    payload = RecordStateInput.model_validate(_minimal_state())
+    assert payload.recommended_action is None
+    assert payload.recommendation_reason is None
+
+
+def test_record_state_accepts_deploy_recommendation():
+    payload = RecordStateInput.model_validate({
+        **_minimal_state(state="parked"),
+        "recommended_action": "deploy",
+        "recommendation_reason": "acceptance has 1 http check against /api/foo",
+    })
+    assert payload.recommended_action == "deploy"
+    assert "http check" in payload.recommendation_reason
+
+
+def test_record_state_accepts_no_deploy_recommendation():
+    payload = RecordStateInput.model_validate({
+        **_minimal_state(),
+        "recommended_action": "no_deploy",
+        "recommendation_reason": "all acceptance is unit_test + script (localhost)",
+    })
+    assert payload.recommended_action == "no_deploy"
+
+
+def test_record_state_accepts_needs_review_recommendation():
+    payload = RecordStateInput.model_validate({
+        **_minimal_state(),
+        "recommended_action": "needs_review",
+    })
+    assert payload.recommended_action == "needs_review"
+
+
+def test_record_state_rejects_invalid_recommended_action():
+    with pytest.raises(ValidationError):
+        RecordStateInput.model_validate({
+            **_minimal_state(),
+            "recommended_action": "maybe",
+        })
+
+
+
 def test_record_state_details_optional():
     """`details` is the long-form expand content — omitted for routine steps."""
     payload = RecordStateInput.model_validate(_minimal_state())

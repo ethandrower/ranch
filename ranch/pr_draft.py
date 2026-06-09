@@ -44,6 +44,9 @@ class RunArtifacts:
     plan_steps: list[dict] = field(default_factory=list)
     files_touched: list[str] = field(default_factory=list)
     acceptance: list[dict] = field(default_factory=list)
+    # H9 P3 — populated from Run row when a deploy completed
+    deploy_url: str | None = None
+    deployed_at: str | None = None  # ISO-formatted
     # Git-derived
     diff_stat: str = ""
     # Optional decorations the operator provides at draft time
@@ -86,6 +89,8 @@ def gather_run_artifacts(run_id: int) -> RunArtifacts:
         artifacts = RunArtifacts(
             ticket=run.ticket, agent=run.agent,
             branch_name=run.branch_name, cwd=run.cwd,
+            deploy_url=run.deploy_url,
+            deployed_at=run.deployed_at.isoformat() if run.deployed_at else None,
         )
         latest = (
             db.query(Dossier)
@@ -251,6 +256,13 @@ def render_pr_body(artifacts: RunArtifacts) -> str:
     risks = _strip_section(artifacts.final_details, r"risks( / open questions)?")
     if risks:
         sections.append(f"## Open questions / risks\n\n{risks}")
+
+    # H9 P3: staging deploy link, if a deploy completed for this run
+    if artifacts.deploy_url:
+        deploy_lines = ["## Staging deploy", "", f"Live at: {artifacts.deploy_url}"]
+        if artifacts.deployed_at:
+            deploy_lines.append(f"Deployed at: {artifacts.deployed_at}")
+        sections.append("\n".join(deploy_lines))
 
     # Linked
     linked_lines = []

@@ -231,6 +231,23 @@ class Interjection(Base):
     run = relationship("Run", back_populates="interjections")
 
 
+class PRCIStatus(Base):
+    """H20 P2 — append-only audit trail of CI status flips per Run/commit.
+
+    The hand polls each PR's CI on a cadence and writes a new row each
+    time the normalized status differs from the previous row. Lets us
+    answer "when did this build go red?" without scrolling BB/GH UI.
+    """
+    __tablename__ = "pr_ci_status"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    run_id      = Column(Integer, ForeignKey("runs.id"), index=True)
+    pr_id       = Column(String, index=True)
+    commit_sha  = Column(String, nullable=True)
+    status      = Column(String)  # queued | running | passed | failed | stopped | unknown
+    fetched_at  = Column(DateTime, default=utcnow, index=True)
+
+
 class Dossier(Base):
     """Agent self-report — structured snapshot of where the run is right now.
 
