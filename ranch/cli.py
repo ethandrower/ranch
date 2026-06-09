@@ -466,59 +466,194 @@ def log_cmd(run_id):
         click.echo(run.log_path)
 
 
-@cli.command("dossier")
-@click.argument("run_id", type=int)
-@click.option("--json", "as_json", is_flag=True, help="Emit raw JSON instead of rendered text.")
-def dossier_cmd(run_id, as_json):
-    """Show the latest dossier (agent self-report) for a run."""
+def _fetch_latest_dossier(run_id: int):
+    """Return (run, payload_dict | None) for the latest dossier on a run.
+
+    Caller is responsible for handling the not-found and no-dossier cases.
+    """
     import json as _json
     from .models import Dossier, Run
 
     with db_session() as db:
         run = db.query(Run).filter_by(id=run_id).one_or_none()
         if not run:
-            console.print(f"[red]Run #{run_id} not found[/red]")
-            raise click.Abort()
+            return None, None
         latest = (
             db.query(Dossier)
             .filter_by(run_id=run_id)
             .order_by(Dossier.created_at.desc())
             .first()
         )
+        # Detach from session — caller will read these as plain values.
+        run_snapshot = {
+            "id": run.id,
+            "agent": run.agent,
+            "ticket": run.ticket,
+            "state": run.state,
+        }
         if not latest:
-            if as_json:
-                click.echo("null")
-            else:
-                console.print(f"[yellow]Run #{run_id} has no dossier yet.[/yellow]")
-            return
+            return run_snapshot, None
         payload = _json.loads(latest.payload_json)
+        payload["_updated_at"] = latest.created_at.isoformat()
+        return run_snapshot, payload
 
-    if as_json:
-        click.echo(_json.dumps(payload, indent=2))
-        return
 
-    console.print(f"[bold]Run #{run_id}[/bold]  [dim]{run.agent} / {run.ticket or 'ad-hoc'}[/dim]")
-    console.print(f"State: [cyan]{payload['state']}[/cyan]")
-    console.print(f"Just did: {payload['just_did']}")
+def _render_dossier_panel(run: dict, payload: dict | None):
+    """Build a Rich Panel renderable for one run's latest dossier."""
+    from rich.panel import Panel
+    from rich.text import Text
+
+    title = f"Run #{run['id']}  ·  {run['agent']} / {run['ticket'] or 'ad-hoc'}"
+    if payload is None:
+        return Panel(Text("no dossier yet", style="dim"), title=title, border_style="dim")
+
+    state_color = {
+        "researching": "blue",
+        "planning": "magenta",
+        "coding": "cyan",
+        "testing": "yellow",
+        "judging": "yellow",
+        "parked": "bold yellow",
+    }.get(payload["state"], "white")
+
+    body = Text()
+    body.append(f"State: ", style="bold")
+    body.append(f"{payload['state']}\n", style=state_color)
+    body.append("Just did: ", style="bold")
+    body.append(f"{payload['just_did']}\n")
     if payload.get("blocker"):
-        console.print(f"[yellow]Blocker:[/yellow] {payload['blocker']}")
+        body.append("Blocker: ", style="bold yellow")
+        body.append(f"{payload['blocker']}\n", style="yellow")
+
     plan = payload.get("plan") or []
     if plan:
-        console.print("\n[bold]Plan[/bold]")
+        body.append("\nPlan\n", style="bold")
         for step in plan:
             mark = {"done": "✓", "in_progress": "▸", "pending": "·"}.get(step["status"], "·")
-            color = {"done": "green", "in_progress": "yellow", "pending": "dim"}.get(step["status"], "white")
-            console.print(f"  [{color}]{mark}[/{color}] {step['step']}")
+            mark_style = {"done": "green", "in_progress": "yellow", "pending": "dim"}.get(step["status"], "white")
+            body.append(f"  {mark} ", style=mark_style)
+            body.append(f"{step['step']}\n")
             if step.get("notes"):
-                console.print(f"      [dim]{step['notes']}[/dim]")
+                body.append(f"      {step['notes']}\n", style="dim")
+
     options = payload.get("options") or []
     if options:
-        console.print("\n[bold]Options[/bold]")
+        body.append("\nOptions\n", style="bold")
         for opt in options:
-            console.print(f"  • [bold]{opt['label']}[/bold] — {opt['description']}")
+            body.append(f"  • ", style="dim")
+            body.append(f"{opt['label']}", style="bold")
+            body.append(f" — {opt['description']}\n")
+
     files = payload.get("files_touched") or []
     if files:
-        console.print(f"\n[dim]Files touched ({len(files)}): {', '.join(files[:8])}{'...' if len(files) > 8 else ''}[/dim]")
+        listing = ", ".join(files[:8]) + ("..." if len(files) > 8 else "")
+        body.append(f"\nFiles touched ({len(files)}): {listing}\n", style="dim")
+
+    return Panel(body, title=title, border_style=state_color)
+
+
+@cli.command("dossier")
+@click.argument("run_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Emit raw JSON instead of rendered text.")
+@click.option("--watch", "watch", is_flag=True, help="Refresh the dossier in place every --interval seconds.")
+@click.option("--interval", default=2.0, type=float, help="Refresh interval in seconds (with --watch).")
+def dossier_cmd(run_id, as_json, watch, interval):
+    """Show the latest dossier (agent self-report) for a run."""
+    import json as _json
+
+    run, payload = _fetch_latest_dossier(run_id)
+    if run is None:
+        console.print(f"[red]Run #{run_id} not found[/red]")
+        raise click.Abort()
+
+    if as_json:
+        if watch:
+            console.print("[red]--watch and --json are mutually exclusive[/red]")
+            raise click.Abort()
+        click.echo(_json.dumps(payload, indent=2) if payload else "null")
+        return
+
+    if not watch:
+        if payload is None:
+            console.print(f"[yellow]Run #{run_id} has no dossier yet.[/yellow]")
+            return
+        console.print(_render_dossier_panel(run, payload))
+        return
+
+    # Live mode — repaint in place until Ctrl-C or the run reaches a terminal state.
+    from rich.live import Live
+    import time
+
+    terminal_states = {"completed", "stopped", "error"}
+    with Live(_render_dossier_panel(run, payload), console=console, refresh_per_second=4) as live:
+        try:
+            while True:
+                time.sleep(interval)
+                run, payload = _fetch_latest_dossier(run_id)
+                if run is None:
+                    break
+                live.update(_render_dossier_panel(run, payload))
+                if run["state"] in terminal_states:
+                    break
+        except KeyboardInterrupt:
+            pass
+
+
+@cli.command("fleet")
+@click.option("--all", "show_all", is_flag=True, help="Include completed/stopped/error runs.")
+@click.option("--watch", "watch", is_flag=True, help="Refresh in place every --interval seconds.")
+@click.option("--interval", default=2.0, type=float, help="Refresh interval in seconds (with --watch).")
+def fleet_cmd(show_all, watch, interval):
+    """Show the latest dossier for every active run, grouped by agent."""
+    from .models import Dossier, Run
+    from rich.console import Group
+    import time
+
+    terminal_states = {"completed", "stopped", "error"}
+
+    def build_view():
+        with db_session() as db:
+            q = db.query(Run)
+            if not show_all:
+                q = q.filter(~Run.state.in_(terminal_states))
+            runs = q.order_by(Run.started_at.desc()).all()
+            panels = []
+            from rich.text import Text
+            from rich.panel import Panel
+            if not runs:
+                return Panel(Text("No active runs.", style="dim"), title="Fleet", border_style="dim")
+            for run in runs:
+                run_snapshot = {
+                    "id": run.id,
+                    "agent": run.agent,
+                    "ticket": run.ticket,
+                    "state": run.state,
+                }
+                latest = (
+                    db.query(Dossier)
+                    .filter_by(run_id=run.id)
+                    .order_by(Dossier.created_at.desc())
+                    .first()
+                )
+                payload = None
+                if latest:
+                    import json as _json
+                    payload = _json.loads(latest.payload_json)
+                panels.append(_render_dossier_panel(run_snapshot, payload))
+            return Group(*panels)
+
+    if not watch:
+        console.print(build_view())
+        return
+
+    from rich.live import Live
+    with Live(build_view(), console=console, refresh_per_second=4) as live:
+        try:
+            while True:
+                time.sleep(interval)
+                live.update(build_view())
+        except KeyboardInterrupt:
+            pass
 
 
 @cli.command()

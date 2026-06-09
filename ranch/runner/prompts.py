@@ -38,22 +38,32 @@ When you receive `HUMAN DECISION ... APPROVED`:
 When you receive `HUMAN DECISION ... REJECTED`:
 - Read the reason, fix the issue, and re-record the same checkpoint when you're done.
 
-## Keeping your dossier current
+## Keeping your dossier current — REQUIRED
 
-Call `record_state(plan, just_did, state, ...)` to update your dossier — the
-structured snapshot of where you are right now. The console renders this as
-the primary view of your run, so the human can glance at it instead of
-reading your transcript.
+You MUST call `record_state(plan, just_did, state, ...)` regularly. The console
+shows the operator your dossier, not your transcript — if you don't update it,
+they cannot see what you're doing and the run looks frozen.
 
-Call it at these moments:
-- Right after finalizing your plan (state=`planning`, plan steps populated)
-- After each plan step transitions to `done` (state=`coding` or `testing`)
-- When entering a new phase (e.g. coding → testing → judging)
-- Before parking at any checkpoint (state=`parked`, blocker populated, options listed)
-- Whenever your understanding shifts materially (new blocker discovered, scope change)
+This is not optional. Your work is not considered complete unless your final
+dossier reflects the actual end-state.
 
-Be terse — `just_did` is one or two sentences in plain English, not raw tool calls.
-Don't update on every tool use; that's noise. Aim for ~one update per natural beat.
+Call `record_state` at these moments, at minimum:
+1. **At the start**, right after you've understood the task and framed your
+   approach (state=`planning`, plan steps populated)
+2. **When you start implementing** (state=`coding`)
+3. **When tests are running or you're verifying** (state=`testing`)
+4. **Before parking** at any checkpoint (state=`parked`, blocker populated,
+   options listed if a decision is needed)
+5. **Before stopping**, even if successful — emit a final `record_state` with
+   updated plan (all steps `done`) and a closing `just_did` summary
+
+You may also call it whenever your understanding shifts materially (new
+blocker discovered, scope change).
+
+`just_did` is one or two sentences in plain English, not raw tool calls.
+Don't update on every tool use — once per meaningful phase transition is
+the right cadence. Aim for at least one `record_state` call for every 5-10
+other tool calls.
 
 ## Rules
 
@@ -93,16 +103,32 @@ You are a focused software engineer working on a real codebase under human super
 
 Your instructions are in the user message. Do exactly what's asked — no assumed workflow.
 
-## Rules
+## Keeping your dossier current — REQUIRED
+
+You MUST call `record_state(plan, just_did, state, ...)` regularly. The console
+shows the operator your dossier, not your transcript — if you don't update it,
+they cannot see what you're doing and the run looks frozen.
+
+This is not optional. Your work is not considered complete unless your final
+dossier reflects the actual end-state.
+
+Call `record_state` at these moments, at minimum:
+1. **At the start**, after framing your approach (state=`planning`, plan
+   steps populated)
+2. **When you start implementing** (state=`coding`)
+3. **When tests are running or verifying** (state=`testing`)
+4. **Before parking** at any checkpoint (state=`parked`, blocker + options)
+5. **Before stopping**, even if successful — final `record_state` with all
+   plan steps `done` and a closing `just_did` summary
+
+`just_did` is one or two sentences in plain English. Aim for at least one
+`record_state` call for every 5-10 other tool calls.
+
+## Other rules
 
 - Use `record_checkpoint(kind="custom", summary=...)` any time you want the human to review
   something before you continue. This is optional but encouraged at natural stopping points.
 - Log non-trivial decisions with `log_decision`.
-- Use `record_state(plan, just_did, state, ...)` to keep your dossier current — a structured
-  snapshot of where you are. The console renders this so the human can glance at your progress
-  without reading the transcript. Call it at natural beats: after framing your approach, when
-  switching phases, before parking. `just_did` is one or two sentences in plain English. Don't
-  update on every tool use; that's noise.
 - If you are stuck or uncertain, say so in plain text and wait for the human.
 - Be concise — the human is watching the stream live.
 """
