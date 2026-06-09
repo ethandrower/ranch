@@ -54,6 +54,11 @@ import {
   sendKeysToSession,
   writeTerminal,
 } from './pty.js';
+import {
+  describeAgentLogs,
+  subscribeLogs,
+  unsubscribeLogs,
+} from './logs.js';
 
 export const IPC_CHANNELS = {
   configGet: 'ranch:config:get',
@@ -98,6 +103,13 @@ export const IPC_CHANNELS = {
   dockerSharedUp: 'ranch:docker:sharedUp',
   dockerSharedDown: 'ranch:docker:sharedDown',
   dockerSharedRestart: 'ranch:docker:sharedRestart',
+  // H19 — streaming logs (Phase 1: local docker compose)
+  logsDescribe: 'ranch:logs:describe',
+  logsSubscribe: 'ranch:logs:subscribe',
+  logsUnsubscribe: 'ranch:logs:unsubscribe',
+  // Push channels for streaming
+  logsLine: 'logs:line',
+  logsExit: 'logs:exit',
 } as const;
 
 export function registerIpcHandlers(): void {
@@ -442,5 +454,46 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.dockerSharedRestart, async () => {
     return dockerSharedRestart(await allWorktreePaths());
+  });
+
+  // H19 — streaming logs
+  ipcMain.handle(IPC_CHANNELS.logsDescribe, async (_event, agent: unknown) => {
+    const { agent: a, worktreePath, dockerConfig } = await resolveAgentWorktree(agent);
+    return describeAgentLogs(a, worktreePath, dockerConfig);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.logsSubscribe, async (event, args: unknown) => {
+    if (!args || typeof args !== 'object') {
+      return { ok: false, reason: 'logs.subscribe requires an args object' };
+    }
+    const a = args as {
+      agent?: unknown;
+      source?: unknown;
+      service?: unknown;
+      tail?: unknown;
+    };
+    if (typeof a.agent !== 'string' || !a.agent) {
+      return { ok: false, reason: 'agent required' };
+    }
+    if (a.source !== 'local' && a.source !== 'remote') {
+      return { ok: false, reason: 'source must be "local" or "remote"' };
+    }
+    const { worktreePath, dockerConfig } = await resolveAgentWorktree(a.agent);
+    return subscribeLogs(
+      {
+        agent: a.agent,
+        worktreePath,
+        source: a.source,
+        service: typeof a.service === 'string' ? a.service : undefined,
+        tail: typeof a.tail === 'number' ? a.tail : undefined,
+        dockerConfig,
+      },
+      event.sender,
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.logsUnsubscribe, async (event, streamId: unknown) => {
+    if (typeof streamId !== 'string') return;
+    unsubscribeLogs(streamId, event.sender);
   });
 }

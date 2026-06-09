@@ -504,6 +504,50 @@ export interface RanchApi {
     sharedDown: () => Promise<ComposeRunResult>;
     sharedRestart: () => Promise<ComposeRunResult>;
   };
+  // H19 — streaming logs (local docker first; remote SSH in Phase 2)
+  logs: {
+    /** Which services / apps does this agent currently expose? */
+    describe: (agent: string) => Promise<AgentLogDescription>;
+    /**
+     * Open a live log subscription. The handler fires for every line
+     * emitted by the source until you call the returned `unsubscribe`.
+     * History (lines main has already buffered) arrives synchronously
+     * via the result; new lines arrive via onLine.
+     */
+    subscribe: (
+      args: LogSubscribeArgs,
+      onLine: (line: string) => void,
+      onExit?: (info: { exitCode: number | null; signal: string | null; expected: boolean }) => void,
+    ) => Promise<LogSubscribeResult>;
+  };
+}
+
+// ─── H19 log streaming surface ───────────────────────────────────
+
+export type LogSource = 'local' | 'remote';
+
+export interface LogSubscribeArgs {
+  agent: string;
+  source: LogSource;
+  /** Compose service name (local) or app name (remote). Omit to tail all. */
+  service?: string;
+  /** Initial lines to surface (default 200). */
+  tail?: number;
+}
+
+export interface LogSubscribeResult {
+  ok: boolean;
+  streamId?: string;
+  reason?: string;
+  /** Lines already buffered on main side (renderer renders these first). */
+  history?: string[];
+  /** Closes the subscription + kills the subprocess when ref-count hits 0. */
+  unsubscribe?: () => void;
+}
+
+export interface AgentLogDescription {
+  local: { services: string[] };
+  remote: { apps: string[] };  // empty in Phase 1; populated in Phase 2
 }
 
 declare global {
