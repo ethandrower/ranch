@@ -212,6 +212,64 @@ def test_render_dossier_panel_skips_details_section_when_absent():
     assert "Details:" not in buf.getvalue()
 
 
+def test_render_dossier_panel_shows_deploy_recommendation():
+    """H9 P2: parked dossier with recommended_action='deploy' renders prominently."""
+    from ranch.cli import _render_dossier_panel
+    payload = {
+        "state": "parked",
+        "just_did": "Tests green, ready for review.",
+        "plan": [],
+        "blocker": "Awaiting pre_push approval",
+        "recommended_action": "deploy",
+        "recommendation_reason": "acceptance has http check against /api/healthz",
+    }
+    panel = _render_dossier_panel(
+        {"id": 1, "agent": "max", "ticket": "ECD-1", "state": "needs_approval"},
+        payload,
+    )
+    from io import StringIO
+    from rich.console import Console as RichConsole
+    buf = StringIO()
+    RichConsole(file=buf, force_terminal=False, width=120).print(panel)
+    output = buf.getvalue()
+    assert "DEPLOY recommended" in output
+    assert "http check" in output
+
+
+def test_render_dossier_panel_shows_no_deploy_recommendation():
+    from ranch.cli import _render_dossier_panel
+    payload = {
+        "state": "parked", "just_did": "Tests green.", "plan": [],
+        "recommended_action": "no_deploy",
+        "recommendation_reason": "all acceptance is unit tests (localhost only)",
+    }
+    panel = _render_dossier_panel(
+        {"id": 1, "agent": "max", "ticket": "ECD-1", "state": "needs_approval"},
+        payload,
+    )
+    from io import StringIO
+    from rich.console import Console as RichConsole
+    buf = StringIO()
+    RichConsole(file=buf, force_terminal=False, width=120).print(panel)
+    assert "NO DEPLOY needed" in buf.getvalue()
+
+
+def test_render_dossier_panel_skips_recommendation_section_when_absent():
+    from ranch.cli import _render_dossier_panel
+    payload = {"state": "coding", "just_did": "x", "plan": []}
+    panel = _render_dossier_panel(
+        {"id": 1, "agent": "max", "ticket": "ECD-1", "state": "in_development"},
+        payload,
+    )
+    from io import StringIO
+    from rich.console import Console as RichConsole
+    buf = StringIO()
+    RichConsole(file=buf, force_terminal=False, width=120).print(panel)
+    output = buf.getvalue()
+    assert "DEPLOY" not in output
+    assert "NEEDS REVIEW" not in output
+
+
 def test_render_dossier_panel_includes_all_sections():
     from ranch.cli import _render_dossier_panel
     payload = {

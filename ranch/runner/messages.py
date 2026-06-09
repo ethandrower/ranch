@@ -113,6 +113,9 @@ class RecordStateInput(BaseModel):
     ticket: Optional[str] = None
     details: Optional[str] = None
     acceptance: Optional[list[AcceptanceCheck]] = None  # H8 — produced by propose, consumed by run_acceptance
+    # H9 Phase 2 — agent's recommendation at pre_push about whether a staging deploy is needed
+    recommended_action: Optional[Literal["deploy", "no_deploy", "needs_review"]] = None
+    recommendation_reason: Optional[str] = None  # one-line rationale shown to the operator
 
     @field_validator("just_did")
     @classmethod

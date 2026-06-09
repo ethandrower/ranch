@@ -251,6 +251,44 @@ def test_render_body_falls_back_to_ticket_code_when_no_jira_base():
     assert "`ECD-100`" in body
 
 
+# ─── H9 P3: staging deploy section in PR body ────────────────────
+
+
+def test_render_body_includes_staging_deploy_when_deploy_url_set():
+    art = RunArtifacts(
+        ticket="ECD-100", agent="max", branch_name="b", cwd="/tmp",
+        final_just_did="x",
+        deploy_url="https://max.staging.citemed.com",
+        deployed_at="2026-06-08T17:00:00+00:00",
+    )
+    body = render_pr_body(art)
+    assert "## Staging deploy" in body
+    assert "https://max.staging.citemed.com" in body
+    assert "2026-06-08" in body
+
+
+def test_render_body_omits_staging_deploy_when_no_deploy_url():
+    art = RunArtifacts(
+        ticket="ECD-100", agent="max", branch_name="b", cwd="/tmp",
+        final_just_did="x",
+    )
+    body = render_pr_body(art)
+    assert "## Staging deploy" not in body
+
+
+def test_render_body_includes_deploy_url_without_timestamp():
+    """deployed_at is optional — render just the URL line if missing."""
+    art = RunArtifacts(
+        ticket="ECD-100", agent="max", branch_name="b", cwd="/tmp",
+        final_just_did="x",
+        deploy_url="https://max.staging.citemed.com",
+    )
+    body = render_pr_body(art)
+    assert "## Staging deploy" in body
+    assert "Live at: https://max.staging.citemed.com" in body
+    assert "Deployed at:" not in body
+
+
 # ─── gather + render_draft ───────────────────────────────────────
 
 
