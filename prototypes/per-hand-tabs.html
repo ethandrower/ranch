@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Ranch — Per-hand tabs prototype</title>
+<title>Ranch — Per-hand kanban + decision packet prototype</title>
 <style>
   :root {
     --bg: #0f1115;
     --panel: #161922;
     --panel-2: #1c2030;
+    --panel-3: #232838;
     --border: #262b3c;
     --border-2: #313753;
     --text: #e6e9ef;
@@ -22,7 +23,6 @@
     --bad-soft: #3a1e1e;
     --magenta: #b85cb8;
     --cyan: #5cd0d0;
-    --shadow: 0 4px 16px rgba(0,0,0,0.4);
   }
   * { box-sizing: border-box; }
   body {
@@ -33,14 +33,13 @@
     font-size: 13px;
     line-height: 1.5;
   }
-  /* ─── Top bar ────────────────────────────────────────────────────── */
+  /* ─── Top bar ─── */
   .topbar {
-    display: flex;
-    align-items: stretch;
+    display: flex; align-items: stretch;
     border-bottom: 1px solid var(--border);
     background: var(--panel);
     user-select: none;
-    height: 48px;
+    height: 44px;
   }
   .brand {
     padding: 0 18px;
@@ -58,20 +57,14 @@
     margin-right: 8px;
     box-shadow: 0 0 8px var(--accent);
   }
-  .tabs {
-    display: flex; align-items: stretch;
-    flex: 1;
-    gap: 0;
-  }
+  .tabs { display: flex; align-items: stretch; flex: 1; }
   .tab {
-    padding: 0 18px;
+    padding: 0 16px;
     display: flex; align-items: center; gap: 8px;
     color: var(--text-dim);
     cursor: pointer;
     border-right: 1px solid var(--border);
     font-size: 13px;
-    transition: background 0.12s, color 0.12s;
-    position: relative;
   }
   .tab:hover { background: var(--panel-2); color: var(--text); }
   .tab.active {
@@ -93,232 +86,410 @@
     border: 1px solid var(--border-2);
     font-weight: 500;
   }
-  .tab .badge.attention {
-    box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.18);
-  }
   .tab .hand-status {
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--ok);
   }
   .tab .hand-status.idle { background: var(--text-faint); }
-  .tab .hand-status.stopped { background: var(--text-faint); opacity: 0.4; }
   .topbar-right {
     padding: 0 16px;
-    display: flex; align-items: center;
-    gap: 16px;
+    display: flex; align-items: center; gap: 16px;
     color: var(--text-dim);
     font-size: 12px;
   }
   .topbar-right .meta { color: var(--text-faint); }
 
-  /* ─── Page body ──────────────────────────────────────────────────── */
-  .page {
-    padding: 24px 28px 100px;
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-  .hand-header {
-    display: flex; align-items: baseline; justify-content: space-between;
-    margin-bottom: 18px;
-  }
-  .hand-header h1 {
-    margin: 0;
-    font-size: 22px; font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-  .hand-header .hand-meta {
-    color: var(--text-dim);
-    font-size: 12px;
-  }
-  .hand-actions {
-    display: flex; gap: 8px;
-  }
-  .btn-mini {
+  /* ─── Routines comparison strip (shows BOTH concepts) ─── */
+  .routines-bar {
     background: var(--panel);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    padding: 5px 10px;
-    font-size: 11.5px;
-    border-radius: 5px;
-    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px 12px;
   }
-  .btn-mini:hover { background: var(--panel-2); color: var(--text); }
-  /* ─── Section groups ─────────────────────────────────────────────── */
-  .group {
-    margin: 28px 0;
+  .routines-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
   }
-  .group:first-child { margin-top: 0; }
-  .group-header {
-    display: flex; align-items: center; gap: 10px;
-    margin-bottom: 12px;
-    font-size: 11px;
+  .routines-header .label {
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--text-dim);
+    color: var(--text-faint);
     font-weight: 600;
   }
-  .group-count {
+  .routines-toggle { display: flex; gap: 2px; }
+  .routines-toggle button {
     background: var(--panel-2);
     border: 1px solid var(--border);
-    padding: 1px 6px;
-    border-radius: 3px;
     color: var(--text-dim);
-    font-size: 10px;
-    font-weight: 500;
+    padding: 4px 12px;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: all 0.12s;
   }
-  .group.needs-you .group-header { color: var(--warn); }
-  .group.needs-you .group-count {
-    background: var(--warn-soft);
-    border-color: var(--warn);
-    color: var(--warn);
-  }
-  .group.in-flight .group-header { color: var(--cyan); }
-  .group.waiting .group-header { color: var(--text-faint); }
-
-  /* ─── Ticket card ────────────────────────────────────────────────── */
-  .ticket {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 12px;
-    overflow: hidden;
-    transition: border-color 0.12s;
-  }
-  .ticket:hover { border-color: var(--border-2); }
-  .ticket.attention {
-    border-left: 3px solid var(--warn);
-  }
-  .ticket .row {
-    padding: 14px 16px;
-    display: grid;
-    grid-template-columns: 120px 1fr auto;
-    align-items: center;
-    gap: 16px;
-  }
-  .ticket .row.bordered {
-    border-top: 1px solid var(--border);
-    padding: 12px 16px;
-    background: rgba(0,0,0,0.18);
-  }
-  .ticket .key {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    color: var(--accent);
+  .routines-toggle button:first-child { border-radius: 4px 0 0 4px; }
+  .routines-toggle button:last-child { border-radius: 0 4px 4px 0; }
+  .routines-toggle button.active {
+    background: var(--accent);
+    color: #0a0f1c;
+    border-color: var(--accent);
     font-weight: 600;
-    font-size: 12.5px;
   }
-  .ticket .summary {
+
+  /* Routines: STRIP CONCEPT */
+  .routines-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .routine {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .routine .icon {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--panel-2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .routine .info { flex: 1; }
+  .routine .name {
+    font-size: 11.5px;
     color: var(--text);
     font-weight: 500;
-    font-size: 13.5px;
   }
-  .ticket .summary-sub {
+  .routine .status {
+    font-size: 10.5px;
     color: var(--text-dim);
-    font-size: 12px;
-    margin-top: 3px;
+    font-family: "SF Mono", monospace;
+    margin-top: 1px;
   }
-  .ticket .state-pill {
-    background: var(--panel-2);
-    border: 1px solid var(--border-2);
-    padding: 3px 9px;
-    border-radius: 999px;
-    font-size: 11px;
-    color: var(--text-dim);
-    font-weight: 500;
-    white-space: nowrap;
+  .routine .status.ok { color: var(--ok); }
+  .routine .status.warn { color: var(--warn); }
+  .routine .pulse {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+    animation: pulse 2s ease-out infinite;
   }
-  .state-planning  { color: var(--magenta); border-color: var(--magenta); background: rgba(184,92,184,0.08); }
-  .state-coding    { color: var(--cyan); border-color: var(--cyan); background: rgba(92,208,208,0.08); }
-  .state-testing   { color: var(--warn); border-color: var(--warn); background: rgba(245,166,35,0.08); }
-  .state-parked    { color: var(--warn); border-color: var(--warn); background: rgba(245,166,35,0.12); font-weight: 600; }
-  .state-pr_review { color: var(--accent); border-color: var(--accent); background: rgba(106,162,255,0.10); }
-  .state-pr_open   { color: var(--ok); border-color: var(--ok); background: rgba(78,185,96,0.10); }
+  .routine.idle .pulse { background: var(--text-faint); animation: none; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(78, 185, 96, 0.5); }
+    70% { box-shadow: 0 0 0 6px rgba(78, 185, 96, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(78, 185, 96, 0); }
+  }
 
-  /* Ticket expanded detail */
-  .ticket .detail {
-    padding: 12px 16px 14px;
-    border-top: 1px solid var(--border);
-    background: rgba(0,0,0,0.18);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
+  /* Routines: EVENT CONCEPT */
+  .routines-event {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 16px;
+    text-align: center;
+    color: var(--text-faint);
     font-size: 12px;
+    min-height: 56px;
+    display: flex; align-items: center; justify-content: center;
   }
-  .detail-block .label {
+  .routines-event.has-event {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--text);
+    text-align: left;
+    justify-content: flex-start;
+    gap: 12px;
+  }
+  .routines-event .event-icon {
+    color: var(--warn);
+    font-size: 18px;
+  }
+  .routines-event .event-body strong { color: var(--warn); }
+  .routines-event .event-ago {
+    color: var(--text-faint);
+    font-size: 11px;
+    margin-left: auto;
+  }
+  .routines-event .pretend {
+    font-style: italic;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    margin-top: 4px;
+  }
+
+  .hint-row {
+    color: var(--text-faint);
+    font-size: 11px;
+    margin-top: 8px;
+    font-style: italic;
+  }
+
+  /* ─── Kanban ─── */
+  .kanban-wrap {
+    overflow-x: auto;
+    padding: 14px 16px 28px;
+    height: calc(100vh - 44px - 124px);  /* topbar + routines */
+  }
+  .kanban {
+    display: grid;
+    grid-template-columns: repeat(10, minmax(150px, 1fr));
+    gap: 10px;
+    min-width: 1500px;
+    align-items: flex-start;
+  }
+  .col {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex; flex-direction: column;
+    min-height: 100px;
+  }
+  .col-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--panel-2);
+    border-radius: 6px 6px 0 0;
+  }
+  .col-title {
     font-size: 10.5px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text-faint);
-    margin-bottom: 4px;
+    color: var(--text-dim);
     font-weight: 600;
   }
-  .detail-block .value { color: var(--text); }
-  .plan-items {
-    list-style: none; padding: 0; margin: 4px 0 0;
+  .col-counts { display: flex; gap: 6px; align-items: center; }
+  .col-count {
+    background: var(--panel-3);
+    color: var(--text-dim);
+    font-size: 10.5px;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .col-attention {
+    background: var(--warn);
+    color: #1c1306;
+    font-size: 10.5px; font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .col-body {
+    padding: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .col.terminal {
+    background: rgba(78,185,96,0.05);
+    border-color: rgba(78,185,96,0.3);
+  }
+  .col.terminal .col-title { color: var(--ok); }
+  .col.attention {
+    box-shadow: 0 0 0 1px var(--warn);
+  }
+
+  /* Cards */
+  .card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 9px;
+    cursor: pointer;
+    transition: border-color 0.12s, transform 0.08s;
+    position: relative;
+  }
+  .card:hover { border-color: var(--border-2); transform: translateY(-1px); }
+  .card.attention {
+    border-left: 3px solid var(--warn);
+    padding-left: 8px;
+  }
+  .card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .card-key {
+    font-family: "SF Mono", Menlo, monospace;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .card-key.adhoc { color: var(--magenta); }
+  .card-summary {
+    color: var(--text);
+    font-size: 12px;
+    margin-top: 3px;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .card-hint {
+    color: var(--text-faint);
+    font-size: 10.5px;
+    margin-top: 4px;
+    font-family: "SF Mono", monospace;
+  }
+  .card .attention-glyph {
+    color: var(--warn);
     font-size: 12px;
   }
-  .plan-items li {
-    padding: 2px 0;
-    color: var(--text-dim);
-    display: flex; gap: 8px; align-items: flex-start;
-  }
-  .plan-items .mark { font-family: "SF Mono", monospace; font-size: 12.5px; min-width: 14px; }
-  .plan-items .done .mark { color: var(--ok); }
-  .plan-items .progress .mark { color: var(--warn); }
-  .plan-items .pending .mark { color: var(--text-faint); }
-  .plan-items .done .text { color: var(--text-dim); text-decoration: line-through; opacity: 0.7; }
-  .plan-items .progress .text { color: var(--text); }
-  .plan-items .pending .text { color: var(--text-faint); }
-
-  /* Acceptance results inline */
-  .acceptance {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    font-size: 11.5px;
-    color: var(--text-dim);
-  }
-  .acceptance.green { color: var(--ok); }
-  .acceptance.red { color: var(--bad); }
-
-  /* Deploy recommendation */
-  .deploy-rec {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 3px 8px;
+  .empty-col {
+    color: var(--text-faint);
+    text-align: center;
+    padding: 18px 8px;
+    font-size: 11px;
+    border: 1px dashed var(--border);
     border-radius: 4px;
-    font-size: 11.5px;
-    font-weight: 600;
+    margin: 6px;
   }
-  .deploy-rec.deploy {
-    background: rgba(106,162,255,0.10);
-    color: var(--accent);
-    border: 1px solid var(--accent);
-  }
-  .deploy-rec.no-deploy {
-    background: var(--panel-2);
-    color: var(--text-dim);
-    border: 1px solid var(--border-2);
-  }
-  .deploy-rec.needs-review {
-    background: rgba(245,166,35,0.10);
-    color: var(--warn);
-    border: 1px solid var(--warn);
-  }
-  .rec-reason { color: var(--text-dim); font-weight: 400; }
 
-  /* Action buttons */
+  /* ─── Side panel (decision packet) ─── */
+  .side-panel {
+    position: fixed;
+    top: 44px; right: 0; bottom: 0;
+    width: 540px;
+    max-width: 50vw;
+    background: var(--panel);
+    border-left: 1px solid var(--border-2);
+    box-shadow: -8px 0 24px rgba(0,0,0,0.4);
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  .side-panel.open { transform: translateX(0); }
+  .panel-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--panel-2);
+  }
+  .panel-header .key {
+    font-family: "SF Mono", monospace;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 13px;
+    margin-right: 8px;
+  }
+  .panel-header .summary {
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 500;
+  }
+  .panel-header .close-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px 8px;
+  }
+  .panel-header .close-btn:hover { color: var(--text); }
+  .panel-body {
+    padding: 18px 20px 32px;
+    flex: 1;
+  }
+
+  /* Sections */
+  .section {
+    margin-bottom: 24px;
+  }
+  .section-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+    margin-bottom: 8px;
+    font-weight: 700;
+  }
+  .section-num {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--panel-3);
+    color: var(--text-dim);
+    font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700;
+  }
+  .section.goal .section-num { background: var(--accent); color: #0a0f1c; }
+  .section.now .section-num,
+  .section.done .section-num { background: var(--cyan); color: #0a0f1c; }
+  .section.decide .section-num { background: var(--warn); color: #1c1306; }
+  .section.watching .section-num { background: var(--text-faint); color: #0a0f1c; }
+
+  .section-content { color: var(--text); font-size: 13px; }
+  .section.goal .section-content { line-height: 1.55; }
+
+  .done-list {
+    list-style: none; padding: 0; margin: 0;
+    font-size: 12.5px;
+  }
+  .done-list li {
+    display: flex; gap: 9px; align-items: flex-start;
+    padding: 3px 0;
+  }
+  .done-list .check { color: var(--ok); font-family: "SF Mono", monospace; min-width: 14px; }
+  .done-list .text { color: var(--text-dim); }
+  .done-list .text.recent { color: var(--text); }
+
+  .now-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 11px 12px;
+  }
+  .now-line {
+    color: var(--text);
+    font-size: 12.5px;
+  }
+  .now-meta {
+    color: var(--text-faint);
+    font-size: 11px;
+    margin-top: 5px;
+    font-family: "SF Mono", monospace;
+  }
+
+  .decide-prompt {
+    font-size: 12.5px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    line-height: 1.55;
+  }
+  .decide-prompt strong { color: var(--text); }
+  .diff-list {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+  }
+  .diff-list .file {
+    display: flex; justify-content: space-between;
+    padding: 1px 0;
+  }
+  .diff-list .ins { color: var(--ok); }
+  .diff-list .del { color: var(--bad); }
+
   .actions {
-    display: flex; gap: 8px;
-    flex-wrap: wrap;
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-top: 14px;
   }
   .btn {
     background: var(--panel-2);
     border: 1px solid var(--border-2);
     color: var(--text);
-    padding: 7px 14px;
+    padding: 8px 14px;
     font-size: 12.5px;
     font-weight: 500;
     border-radius: 5px;
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
   }
   .btn:hover { background: var(--border-2); }
   .btn-primary {
@@ -328,12 +499,6 @@
     font-weight: 600;
   }
   .btn-primary:hover { background: #87b6ff; }
-  .btn-warn {
-    background: var(--warn);
-    color: #1c1306;
-    border-color: var(--warn);
-    font-weight: 600;
-  }
   .btn-danger {
     color: var(--bad);
     border-color: var(--bad-soft);
@@ -344,33 +509,69 @@
     color: var(--cyan);
     border-color: var(--cyan);
   }
-  .btn-takeover:hover { background: rgba(92,208,208,0.10); }
 
-  /* Compact waiting row */
-  .ticket.compact .row { padding: 10px 16px; }
-  .ticket.compact .summary-sub { display: none; }
-
-  /* Last-updated relative ago */
-  .ago { color: var(--text-faint); font-size: 11.5px; }
-
-  /* Empty state */
-  .empty {
-    padding: 36px 16px;
-    text-align: center;
-    color: var(--text-faint);
-    font-size: 13px;
-    border: 1px dashed var(--border);
-    border-radius: 8px;
+  .watching-content {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 14px;
   }
+  .watching-content .next-check {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .watching-content .next-check strong { color: var(--text); }
+  .watching-content .progress-track {
+    margin-top: 10px;
+    background: var(--panel-3);
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .watching-content .progress-fill {
+    background: var(--cyan);
+    height: 100%;
+    transition: width 0.4s ease;
+  }
+  .watching-content .eta {
+    color: var(--text-faint);
+    font-size: 11px;
+    margin-top: 8px;
+    font-family: "SF Mono", monospace;
+  }
+
+  .recommendation {
+    background: rgba(106,162,255,0.10);
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .recommendation.no-deploy {
+    background: var(--panel-3);
+    border-color: var(--border-2);
+    color: var(--text-dim);
+  }
+  .recommendation .rec-label {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: block;
+    margin-bottom: 3px;
+  }
+  .recommendation.no-deploy .rec-label { color: var(--text-faint); }
 
   /* Footer hint */
   .footer-hint {
     text-align: center;
-    margin-top: 36px;
-    padding: 12px;
+    padding: 6px;
     color: var(--text-faint);
-    font-size: 11.5px;
-    border-top: 1px solid var(--border);
+    font-size: 10.5px;
+    font-style: italic;
   }
 </style>
 </head>
@@ -384,351 +585,730 @@
     </div>
   </div>
 
-  <div class="page" id="page"></div>
+  <!-- Routines area: showing BOTH concepts so we can pick -->
+  <div class="routines-bar">
+    <div class="routines-header">
+      <div class="label">⟳ Hand routines · <span id="routinesHandName">max</span></div>
+      <div class="routines-toggle">
+        <button id="rtStrip" class="active" onclick="setRoutines('strip')">Concept A — Always-visible strip</button>
+        <button id="rtEvent" onclick="setRoutines('event')">Concept B — Only when events fire</button>
+      </div>
+    </div>
+    <div id="routinesContent"></div>
+  </div>
 
-  <div class="footer-hint">
-    Prototype. Click between tabs above. State is mocked from a realistic ranch.db.
+  <div class="kanban-wrap">
+    <div class="kanban" id="kanban"></div>
+  </div>
+
+  <div class="side-panel" id="sidePanel">
+    <div class="panel-header">
+      <div>
+        <span class="key" id="panelKey">—</span>
+        <span class="summary" id="panelSummary">—</span>
+      </div>
+      <button class="close-btn" onclick="closePanel()">✕</button>
+    </div>
+    <div class="panel-body" id="panelBody"></div>
+  </div>
+
+  <div class="footer-hint" id="footerHint">
+    Prototype v3 · click any card → side panel opens with Goal / Done / Now / Decide (or Watching for).
   </div>
 
 <script>
-// ─── Mock data: realistic-shaped tickets across 4 hands ─────────────
-// This is what the live console would derive from SQLite via IPC.
+// ───────────────────────────────────────────────────────────────────
+// Ten canonical pipeline stages, in display order left → right.
+// ───────────────────────────────────────────────────────────────────
+const STAGES = [
+  {key: "triage",    label: "Triage"},
+  {key: "scope",     label: "Scope"},
+  {key: "plan",      label: "Plan"},
+  {key: "code",      label: "Code"},
+  {key: "verify",    label: "Verify"},
+  {key: "pre_push",  label: "Pre-push"},
+  {key: "deploy",    label: "Deploy"},
+  {key: "pr_open",   label: "PR open"},
+  {key: "review",    label: "Review"},
+  {key: "merge",     label: "Merge", terminal: true},
+];
+
+// ───────────────────────────────────────────────────────────────────
+// Mock data shaped roughly the way the live ranch.db would expose it.
+// ───────────────────────────────────────────────────────────────────
 const HANDS = {
   max: {
-    label: "max",
-    status: "running",
-    project: "ECD",
-    poll_seconds: 30,
+    label: "max", status: "running",
+    routines: {
+      jira_triage:  {last_poll_seconds_ago: 12, next_in: 18, status: "ok"},
+      pr_comments:  {last_poll_seconds_ago: 47, next_in: 73, status: "ok", watching_count: 2},
+      ci_status:    {last_poll_seconds_ago: 23, next_in: 37, status: "ok", watching_count: 2},
+      self_review:  {state: "idle", note: "active during agent QA phases only"},
+    },
+    events: [
+      {kind: "ci_flip", ticket: "ECD-1762", from: "running", to: "failed", ago: "30s"},
+    ],
     tickets: [
       {
-        key: "ECD-2087", summary: "Restore post-scrape dedup dispatch",
-        ranch_state: "parked", checkpoint: "pre_push",
-        just_did: "Acceptance 4/4 green; reviewed diff, ready to push.",
-        ago: "2m",
-        plan: [
-          {status: "done", text: "Read scrape dispatch flow"},
-          {status: "done", text: "Add post-dedup dispatch step"},
-          {status: "done", text: "Wire onComplete callback"},
-          {status: "done", text: "Pytest + curl smoke"},
-        ],
-        acceptance: {pass: 4, total: 4},
-        deploy_rec: "deploy", deploy_reason: "acceptance has http check + scraper integration",
-        files_touched: 6,
-        attention: true,
+        key: "ECD-2105", stage: "triage",
+        summary: "Improve search hit caching",
+        hint: "score 78 — in queue",
+        goal: "Reduce repeat search-hit DB hits on the lit-review index page; we're seeing 8+ identical queries per page load.",
       },
       {
-        key: "ECD-2073", summary: "Performance deploy — Celery worker scaling",
-        ranch_state: "parked", checkpoint: "plan_ready",
-        just_did: "Plan drafted from epic + sister tickets. 5 steps, complexity M.",
-        ago: "12m",
-        plan: [
-          {status: "pending", text: "Inventory worker queue assignments"},
-          {status: "pending", text: "Identify hot queues from prod metrics"},
-          {status: "pending", text: "Update Procfile worker scaling"},
-          {status: "pending", text: "Add observability hooks"},
-          {status: "pending", text: "pytest + smoke against staging"},
-        ],
-        deploy_rec: "deploy", deploy_reason: "needs release-phase validation in realistic Procfile",
-        attention: true,
+        key: "ECD-2099", stage: "triage",
+        summary: "Add pagination headers to /api/articles",
+        hint: "score 62",
+        goal: "Expose Link headers so external consumers can paginate without parsing the body.",
       },
       {
-        key: "ECD-1880", summary: "Add audit log for migration runs",
-        ranch_state: "coding",
-        just_did: "Wrote failing test for the audit log writer.",
-        ago: "1m",
-        plan: [
-          {status: "done", text: "Inspect existing migration hook"},
-          {status: "done", text: "Failing test for audit writer"},
-          {status: "progress", text: "Implement AuditLogWriter"},
-          {status: "pending", text: "Verify with run_acceptance"},
+        key: "ECD-2078", stage: "triage",
+        summary: "Migrate old search endpoint to v3",
+        hint: "score 45",
+        goal: "Sunset /api/search/v1 in favor of v3 which has consistent return shapes.",
+      },
+      {
+        key: "ECD-2073", stage: "plan",
+        summary: "Performance deploy — Celery worker scaling",
+        hint: "parked · 12m",
+        attention: true,
+        checkpoint: "plan_ready",
+        goal: "Improve throughput on hot Celery queues by isolating scrape-dispatch tasks to a dedicated worker. Should cut p95 dispatch latency by 40% per prod metrics.",
+        done: [
+          "Read epic + sister tickets",
+          "Pulled prod metrics for queue depth distribution",
+          "Drafted 5-step plan (complexity M)",
         ],
+        now: {
+          line: "Parked at plan_ready awaiting operator review of the proposed plan.",
+          meta: "in state 12m 06s · token use 9.2k · last record_state 12m ago",
+        },
+        plan_preview: [
+          "Inventory worker queue assignments",
+          "Identify hot queues from prod metrics",
+          "Update Procfile worker scaling",
+          "Add observability hooks",
+          "pytest + smoke against staging",
+        ],
+        deploy_rec: "deploy",
+        deploy_reason: "needs release-phase validation in realistic Procfile",
+      },
+      {
+        key: "ECD-1880", stage: "code",
+        summary: "Add audit log for migration runs",
+        hint: "▸ 3 of 7 plan steps",
         attention: false,
+        goal: "Every migration run should land a row in an audit table so we can answer 'what schema state was prod in on date X' without grovelling through Sentry.",
+        done: [
+          "Inspect existing migration hook",
+          "Failing test for audit writer",
+        ],
+        now: {
+          line: "Implementing AuditLogWriter. Just wrote the failing test; about to implement the writer.",
+          meta: "in state 1m 30s · 11.2k tokens · last record_state 1m ago",
+        },
+        next_checkpoint: "tests_green",
+        next_eta_seconds: 240,
+        next_progress_pct: 38,
       },
       {
-        key: "ECD-1762", summary: "Citation export — DOI formatting",
-        ranch_state: "pr_review", checkpoint: null,
-        just_did: "PR open; 2 new review comments arrived 4m ago.",
-        ago: "4m",
+        key: "ECD-2087", stage: "pre_push",
+        summary: "Restore post-scrape dedup dispatch",
+        hint: "parked · 2m · deploy?",
+        attention: true,
+        checkpoint: "pre_push",
+        goal: "Restore the post-scrape dedup step that was dropped in the 0317 migration. Fix the silent data loss it caused.",
+        done: [
+          "Read scrape dispatch flow",
+          "Added post-dedup dispatch step in lit_reviews/dedup/dispatch.py",
+          "Wired onComplete callback in tasks.py",
+          "Pytest 4/4 + scraper integration green",
+        ],
+        now: {
+          line: "Acceptance 4/4 green. Diff is +88/-12 across 3 files. Ready for operator review.",
+          meta: "in state 2m 14s · 18.4k tokens · 6 commits ahead of develop",
+        },
+        diff: [
+          {file: "lit_reviews/dedup/dispatch.py", ins: 64, del: 8},
+          {file: "lit_reviews/tasks.py",          ins: 22, del: 4},
+          {file: "tests/test_dedup_dispatch.py",  ins: 88, del: 0},
+        ],
+        deploy_rec: "deploy",
+        deploy_reason: "acceptance has a real scraper integration check that needs the remote scraper fleet to validate end-to-end",
+      },
+      {
+        key: "ECD-1762", stage: "review",
+        summary: "Citation export — DOI formatting",
+        hint: "2 new comments · 4m",
+        attention: true,
         pr_id: 1834,
-        comments: 2,
-        attention: true,
+        ci: "failed",
+        goal: "Format DOIs consistently across the citation export pipeline — strip 'DOI:' / 'doi.org/' prefixes, handle the 10.x convention.",
+        done: [
+          "Parsed reviewer expectations from BB comments",
+          "Triaged 2 comments — both AGREE",
+          "Applied fix for vinod's nit on regex clarity",
+        ],
+        now: {
+          line: "Just pushed fix for vinod's comments. CI was running, just turned red 30s ago.",
+          meta: "PR #1834 · CI failed · 2 unresolved comments",
+        },
+        decide_kind: "respond_to_review",
+        comments_preview: [
+          {author: "vinod", body: "Should this be Title Case before stripping? We had a bug where 'DOI: 10.x' became 'doi: 10.x'."},
+        ],
       },
       {
-        key: "ECD-1623", summary: "Scrape worker timeout handling",
-        ranch_state: "pr_open",
-        just_did: "PR opened, CI passed (12m). No reviewers assigned yet.",
-        ago: "44m",
-        pr_id: 1801, ci: "passed",
+        key: "ECD-1623", stage: "pr_open",
+        summary: "Scrape worker timeout handling",
+        hint: "ci ✓ · no reviewers",
         attention: false,
+        pr_id: 1801, ci: "passed",
+        goal: "Add timeout handling to scrape workers so a stuck request doesn't block the queue.",
+        done: [
+          "Added timeout wrapper",
+          "Acceptance 3/3 green",
+          "PR opened, CI passed",
+        ],
+        now: {
+          line: "PR open for 44 minutes. CI passed. Waiting for a reviewer to be assigned.",
+          meta: "PR #1801 · 4 files changed",
+        },
+        next_checkpoint: "first reviewer activity",
+        next_eta_seconds: null,
+      },
+    ],
+    adhoc: [
+      {
+        key: "(no ticket)", stage: "code", adhoc: true,
+        summary: "Investigating shared scraper broker queue depth",
+        hint: "researching",
+        goal: "Operator asked: why is the DEV_max queue at 124 entries? Is this a leak or just normal backlog?",
+        done: [
+          "Pulled queue depth from Redis",
+          "Compared to 7-day baseline (avg 18)",
+        ],
+        now: {
+          line: "Reading scrapers/dispatch.py to map queue → worker mapping.",
+          meta: "no ticket · researching · 3m elapsed",
+        },
       },
     ],
   },
   jeffy: {
-    label: "jeffy",
-    status: "running",
-    project: "ECD",
-    poll_seconds: 30,
+    label: "jeffy", status: "running",
+    routines: {
+      jira_triage:  {last_poll_seconds_ago: 28, next_in: 2, status: "ok"},
+      pr_comments:  {last_poll_seconds_ago: 84, next_in: 36, status: "ok", watching_count: 1},
+      ci_status:    {last_poll_seconds_ago: 41, next_in: 19, status: "ok", watching_count: 1},
+      self_review:  {state: "active", note: "running on ECD-1853"},
+    },
+    events: [],
     tickets: [
       {
-        key: "ECD-1853", summary: "Lit-reviews migration merge fix",
-        ranch_state: "testing",
-        just_did: "Implementation complete; running acceptance now.",
-        ago: "30s",
-        plan: [
-          {status: "done", text: "Reproduce the migration conflict"},
-          {status: "done", text: "Write rollback test"},
-          {status: "done", text: "Implement merge migration"},
-          {status: "progress", text: "Run acceptance"},
-        ],
-        attention: false,
+        key: "ECD-2071", stage: "triage",
+        summary: "PubMed search — handle 429 backoff cleanly",
+        hint: "score 72",
+        goal: "Currently 429 from NCBI throws to Sentry instead of backing off + retrying.",
       },
       {
-        key: "ECD-1720", summary: "Article preview pagination",
-        ranch_state: "pr_review",
-        just_did: "PR awaiting review for 3 hours; no comments yet.",
-        ago: "3h",
-        pr_id: 1740, ci: "passed",
+        key: "ECD-1853", stage: "verify",
+        summary: "Lit-reviews migration merge fix",
+        hint: "▸ acceptance",
         attention: false,
+        goal: "0351 migration conflicts with the 0349 merge. Need a merge migration that lands a coherent schema.",
+        done: [
+          "Reproduce the migration conflict",
+          "Write rollback test",
+          "Implement merge migration",
+        ],
+        now: {
+          line: "Implementation complete; running run_acceptance now (4 checks).",
+          meta: "in state 30s · 8.4k tokens",
+        },
+        next_checkpoint: "acceptance results",
+        next_eta_seconds: 30,
+        next_progress_pct: 85,
+      },
+      {
+        key: "ECD-1720", stage: "review",
+        summary: "Article preview pagination",
+        hint: "3h · no comments",
+        attention: false,
+        pr_id: 1740, ci: "passed",
+        goal: "Paginate the article preview API by 20 instead of returning the full set.",
+        done: ["Implementation", "Acceptance 3/3 green", "PR opened"],
+        now: {
+          line: "PR open for 3 hours. CI passed. Awaiting reviewer feedback.",
+          meta: "PR #1740 · 3 files changed",
+        },
+        next_checkpoint: "reviewer activity",
+        next_eta_seconds: null,
       },
     ],
+    adhoc: [],
   },
   arnold: {
-    label: "arnold",
-    status: "running",
-    project: "ECD",
-    poll_seconds: 30,
+    label: "arnold", status: "running",
+    routines: {
+      jira_triage:  {last_poll_seconds_ago: 15, next_in: 15, status: "ok"},
+      pr_comments:  {last_poll_seconds_ago: 360, next_in: -240, status: "warn", watching_count: 1, note: "1 unresolved comment, last check 6m ago"},
+      ci_status:    {last_poll_seconds_ago: 51, next_in: 9, status: "ok", watching_count: 1},
+      self_review:  {state: "idle"},
+    },
+    events: [
+      {kind: "review_comment", ticket: "ECD-1410", author: "mohamed", body: "Why rebuild on every dispatch? The whole point of the cached parse was to avoid this. Push back unless I'm missing something.", ago: "6m"},
+    ],
     tickets: [
       {
-        key: "ECD-2087", summary: "Restore post-scrape dedup dispatch (sister of max's)",
-        ranch_state: "parked", checkpoint: "plan_ready",
-        just_did: "Proposal drafted; NOTE: max has the same ticket — operator may want to drop one.",
-        ago: "8m",
-        plan: [
-          {status: "pending", text: "Read the same code max read"},
-          {status: "pending", text: "..."},
-        ],
-        deploy_rec: "needs-review", deploy_reason: "duplicate work with max's ECD-2087",
-        attention: true,
+        key: "ECD-1955", stage: "triage",
+        summary: "Refactor lit_reviews/serializers.py base class",
+        hint: "score 56",
+        goal: "Pull repeated patterns up to a base serializer to remove ~120 lines of duplication.",
       },
       {
-        key: "ECD-1644", summary: "MAUDE adverse-event ingester rate limit",
-        ranch_state: "parked", checkpoint: "pre_push",
-        just_did: "Acceptance 3/3 green; diff is small and contained.",
-        ago: "22m",
-        plan: [
-          {status: "done", text: "Reproduce the rate-limit hit"},
-          {status: "done", text: "Add exponential backoff"},
-          {status: "done", text: "pytest + curl smoke"},
-        ],
-        acceptance: {pass: 3, total: 3},
-        deploy_rec: "no-deploy", deploy_reason: "all acceptance is unit_test + script (localhost)",
+        key: "ECD-2087", stage: "plan",
+        summary: "Restore post-scrape dedup dispatch (collision with max's)",
+        hint: "parked · 8m · DUPE",
         attention: true,
+        checkpoint: "plan_ready",
+        goal: "Restore the post-scrape dedup step. ⚠ NOTE: max has the same ticket key assigned, scoped 4 minutes earlier — operator may want to drop arnold's.",
+        done: ["Pulled Jira ticket + sister tickets"],
+        now: {
+          line: "Proposal drafted. The duplicate-work conflict surfaced before I started executing.",
+          meta: "in state 8m 47s · 6.8k tokens",
+        },
+        plan_preview: [
+          "(would duplicate max's work — recommend dropping this run)",
+        ],
+        deploy_rec: "needs-review",
+        deploy_reason: "duplicate work with max's ECD-2087",
       },
       {
-        key: "ECD-1410", summary: "Worker spatial pre-parse — index rebuild",
-        ranch_state: "pr_review",
-        just_did: "1 new review comment 6m ago — looks like a push-back on the scope.",
-        ago: "6m",
-        pr_id: 1620, comments: 1,
+        key: "ECD-1644", stage: "pre_push",
+        summary: "MAUDE adverse-event ingester rate limit",
+        hint: "parked · 22m · no deploy",
         attention: true,
+        checkpoint: "pre_push",
+        goal: "MAUDE was 429-ing us; needed exponential backoff in the ingester loop.",
+        done: [
+          "Reproduce the rate-limit hit",
+          "Add exponential backoff (max 30s, 5 retries)",
+          "Acceptance: pytest + curl smoke 3/3 green",
+        ],
+        now: {
+          line: "Acceptance 3/3 green. Diff is small and contained.",
+          meta: "in state 22m 03s · 14.6k tokens",
+        },
+        diff: [
+          {file: "scrapers/maude/ingester.py", ins: 36, del: 4},
+          {file: "tests/test_maude_ratelimit.py", ins: 52, del: 0},
+        ],
+        deploy_rec: "no-deploy",
+        deploy_reason: "all acceptance is unit_test + script (localhost) — change is contained logic, no UI / no public URL",
+      },
+      {
+        key: "ECD-1410", stage: "review",
+        summary: "Worker spatial pre-parse — index rebuild",
+        hint: "1 push-back · 6m",
+        attention: true,
+        pr_id: 1620, ci: "passed",
+        goal: "Speed up spatial pre-parse by avoiding redundant index rebuilds on every dispatch.",
+        done: [
+          "Implementation",
+          "Acceptance 4/4 green",
+          "PR opened, CI passed",
+        ],
+        now: {
+          line: "mohamed pushed back on the approach 6m ago. Awaiting strategy decision.",
+          meta: "PR #1620 · 1 unresolved comment",
+        },
+        decide_kind: "respond_to_review",
+        comments_preview: [
+          {author: "mohamed", body: "Why rebuild on every dispatch? The whole point of the cached parse was to avoid this. Push back unless I'm missing something."},
+        ],
       },
     ],
+    adhoc: [],
   },
   kesha: {
-    label: "kesha",
-    status: "idle",
-    project: "ECD",
-    poll_seconds: 30,
+    label: "kesha", status: "idle",
+    routines: {
+      jira_triage:  {last_poll_seconds_ago: 4, next_in: 26, status: "ok", note: "0 viable candidates last poll"},
+      pr_comments:  {last_poll_seconds_ago: 110, next_in: 10, status: "ok", watching_count: 1},
+      ci_status:    {last_poll_seconds_ago: 59, next_in: 1, status: "ok", watching_count: 1},
+      self_review:  {state: "idle"},
+    },
+    events: [],
     tickets: [
       {
-        key: "ECD-1410", summary: "PubMed callback signing v2",
-        ranch_state: "pr_review",
-        just_did: "PR open, no new activity since merge of upstream develop.",
-        ago: "2d",
-        pr_id: 1580,
+        key: "ECD-1410", stage: "review",
+        summary: "PubMed callback signing v2",
+        hint: "2d · no activity",
         attention: false,
+        pr_id: 1580, ci: "passed",
+        goal: "v2 signing scheme — HMAC instead of static token.",
+        done: ["Implementation", "Acceptance 5/5 green", "PR opened"],
+        now: {
+          line: "PR open for 2 days with no review activity. Branch is up to date with develop.",
+          meta: "PR #1580 · 8 files changed",
+        },
+        next_checkpoint: "reviewer activity",
+        next_eta_seconds: null,
       },
     ],
+    adhoc: [],
   },
 };
 
-// ─── Tab strip ───────────────────────────────────────────────────────
+let current = "max";
+let routinesMode = "strip";
+let selectedCard = null;
+
+// ─── Tabs ─────────────────────────────────────────────────────────
 function renderTabs() {
   const el = document.getElementById("tabs");
   el.innerHTML = "";
   Object.entries(HANDS).forEach(([k, h]) => {
-    const needsYouCount = h.tickets.filter(t => t.attention).length;
+    const all = h.tickets.concat(h.adhoc || []);
+    const needsYouCount = all.filter(t => t.attention).length;
     const tab = document.createElement("div");
     tab.className = "tab" + (k === current ? " active" : "");
-    tab.dataset.hand = k;
     tab.innerHTML = `
-      <span class="hand-status ${h.status === 'idle' ? 'idle' : (h.status === 'stopped' ? 'stopped' : '')}"></span>
+      <span class="hand-status ${h.status === 'idle' ? 'idle' : ''}"></span>
       <span class="hand-name">${h.label}</span>
-      <span class="badge ${needsYouCount === 0 ? 'zero' : 'attention'}">${needsYouCount === 0 ? '0' : needsYouCount}</span>
+      <span class="badge ${needsYouCount === 0 ? 'zero' : ''}">${needsYouCount === 0 ? '0' : needsYouCount}</span>
     `;
-    tab.onclick = () => { current = k; render(); };
+    tab.onclick = () => {
+      current = k; closePanel();
+      render();
+    };
     el.appendChild(tab);
   });
 }
 
-// ─── Hand detail view ────────────────────────────────────────────────
-function renderHand() {
-  const hand = HANDS[current];
-  const page = document.getElementById("page");
-
-  const needsYou = hand.tickets.filter(t => t.attention);
-  const inFlight = hand.tickets.filter(t => !t.attention && (t.ranch_state === "coding" || t.ranch_state === "testing" || t.ranch_state === "planning"));
-  const waiting = hand.tickets.filter(t => !t.attention && (t.ranch_state === "pr_review" || t.ranch_state === "pr_open"));
-
-  page.innerHTML = `
-    <div class="hand-header">
-      <div>
-        <h1>${hand.label}</h1>
-        <div class="hand-meta">
-          ${hand.tickets.length} ticket${hand.tickets.length === 1 ? '' : 's'} in flight · polling every ${hand.poll_seconds}s · status: ${hand.status}
-        </div>
-      </div>
-      <div class="hand-actions">
-        <button class="btn-mini">⋮ menu</button>
-        <button class="btn-mini">⏸ pause hand</button>
-        <button class="btn-mini">+ start new ticket</button>
-      </div>
-    </div>
-
-    ${renderGroup('needs-you', '⚠ Needs you', needsYou)}
-    ${renderGroup('in-flight', '▸ In flight', inFlight)}
-    ${renderGroup('waiting', '◌ Waiting on PR / CI', waiting)}
-  `;
+// ─── Routines area ────────────────────────────────────────────────
+function setRoutines(mode) {
+  routinesMode = mode;
+  document.getElementById("rtStrip").classList.toggle("active", mode === "strip");
+  document.getElementById("rtEvent").classList.toggle("active", mode === "event");
+  renderRoutines();
 }
 
-function renderGroup(cls, title, tickets) {
-  if (tickets.length === 0) {
-    if (cls === 'needs-you') return '';  // hide empty needs-you to reduce visual noise when caught up
+function renderRoutines() {
+  document.getElementById("routinesHandName").textContent = current;
+  const wrap = document.getElementById("routinesContent");
+  const hand = HANDS[current];
+
+  if (routinesMode === "strip") {
+    wrap.innerHTML = `
+      <div class="routines-strip">
+        ${renderRoutine("⟳", "Jira triage", hand.routines.jira_triage)}
+        ${renderRoutine("💬", "PR comments", hand.routines.pr_comments)}
+        ${renderRoutine("✓", "CI status", hand.routines.ci_status)}
+        ${renderRoutine("👁", "Self-review", hand.routines.self_review)}
+      </div>
+      <div class="hint-row">
+        Concept A: persistent visibility of background routines. Tradeoff — eats screen
+        space even when nothing's happening; operator may tune it out (banner blindness).
+      </div>
+    `;
+  } else {
+    const events = hand.events || [];
+    if (events.length === 0) {
+      wrap.innerHTML = `
+        <div class="routines-event">
+          No recent routine events. The bar surfaces only when something fires.
+        </div>
+        <div class="hint-row">
+          Concept B: silent unless an event fires (CI flipped, comment arrived, etc.).
+          Tradeoff — no proof of life when quiet; operator may wonder "is the hand even running?"
+          <div class="pretend">↓ Pretend this just happened ↓</div>
+        </div>
+        <div class="routines-event has-event" style="margin-top: 8px">
+          <span class="event-icon">⚡</span>
+          <div class="event-body">
+            <div><strong>CI failed</strong> on PR #1834 (ECD-1762)</div>
+            <div style="color: var(--text-dim); font-size: 11.5px; margin-top: 2px;">build went <span style="color: var(--ok)">running</span> → <span style="color: var(--bad)">failed</span></div>
+          </div>
+          <div class="event-ago">30s ago</div>
+        </div>
+      `;
+    } else {
+      const banners = events.map(ev => `
+        <div class="routines-event has-event" style="margin-bottom: 6px">
+          <span class="event-icon">⚡</span>
+          <div class="event-body">
+            ${ev.kind === 'ci_flip' ? `<div><strong>CI ${ev.to}</strong> on ${ev.ticket}</div><div style="color: var(--text-dim); font-size: 11.5px; margin-top: 2px;">build went ${ev.from} → ${ev.to}</div>` : ''}
+            ${ev.kind === 'review_comment' ? `<div><strong>${ev.author}</strong> commented on ${ev.ticket}</div><div style="color: var(--text-dim); font-size: 11.5px; margin-top: 2px; font-style: italic">"${ev.body.slice(0, 90)}${ev.body.length > 90 ? '…' : ''}"</div>` : ''}
+          </div>
+          <div class="event-ago">${ev.ago}</div>
+        </div>
+      `).join('');
+      wrap.innerHTML = banners + `<div class="hint-row">Concept B: event-driven. Quiet when nothing happens.</div>`;
+    }
+  }
+}
+
+function renderRoutine(icon, name, r) {
+  if (r.state === 'idle') {
     return `
-      <div class="group ${cls}">
-        <div class="group-header">${title} <span class="group-count">0</span></div>
-        <div class="empty">nothing here right now</div>
+      <div class="routine idle">
+        <div class="icon">${icon}</div>
+        <div class="info">
+          <div class="name">${name}</div>
+          <div class="status">idle ${r.note ? '· ' + r.note : ''}</div>
+        </div>
+        <div class="pulse"></div>
       </div>`;
   }
-  return `
-    <div class="group ${cls}">
-      <div class="group-header">${title} <span class="group-count">${tickets.length}</span></div>
-      ${tickets.map(renderTicket).join('')}
-    </div>`;
-}
-
-function statePill(t) {
-  if (t.checkpoint === "pre_push") return '<span class="state-pill state-parked">parked · pre_push</span>';
-  if (t.checkpoint === "plan_ready") return '<span class="state-pill state-parked">parked · plan_ready</span>';
-  if (t.ranch_state === "coding") return '<span class="state-pill state-coding">▸ coding</span>';
-  if (t.ranch_state === "testing") return '<span class="state-pill state-testing">▸ testing</span>';
-  if (t.ranch_state === "planning") return '<span class="state-pill state-planning">▸ planning</span>';
-  if (t.ranch_state === "pr_review") return `<span class="state-pill state-pr_review">pr_review · ${t.comments || 0} new</span>`;
-  if (t.ranch_state === "pr_open") return `<span class="state-pill state-pr_open">pr_open · ci ${t.ci || '?'}</span>`;
-  return `<span class="state-pill">${t.ranch_state}</span>`;
-}
-
-function renderTicket(t) {
-  const planHtml = t.plan ? `
-    <div class="detail-block">
-      <div class="label">Plan</div>
-      <ul class="plan-items">
-        ${t.plan.map(s => {
-          const mark = s.status === 'done' ? '✓' : s.status === 'progress' ? '▸' : '·';
-          return `<li class="${s.status}"><span class="mark">${mark}</span><span class="text">${s.text}</span></li>`;
-        }).join('')}
-      </ul>
-    </div>` : '';
-
-  const acceptHtml = t.acceptance ? `
-    <div class="detail-block">
-      <div class="label">Acceptance</div>
-      <div class="acceptance ${t.acceptance.pass === t.acceptance.total ? 'green' : 'red'}">
-        ${t.acceptance.pass}/${t.acceptance.total} passed
-      </div>
-    </div>` : '';
-
-  const deployHtml = t.deploy_rec ? `
-    <div class="detail-block" style="grid-column: 1 / -1;">
-      <div class="label">Deploy recommendation</div>
-      <span class="deploy-rec ${t.deploy_rec}">
-        ${t.deploy_rec === 'deploy' ? 'DEPLOY recommended' : t.deploy_rec === 'no-deploy' ? 'NO DEPLOY needed' : 'NEEDS REVIEW'}
-        <span class="rec-reason">— ${t.deploy_reason}</span>
-      </span>
-    </div>` : '';
-
-  const actions = renderActions(t);
-
-  // Decide whether to show the detail block (expanded for "needs you" tickets, collapsed for in-flight)
-  const showDetail = t.attention || t.ranch_state === 'coding' || t.ranch_state === 'testing';
-  const detailHtml = showDetail && (planHtml || acceptHtml || deployHtml) ? `
-    <div class="detail">
-      ${planHtml}
-      ${acceptHtml}
-      ${deployHtml}
-    </div>` : '';
-
-  return `
-    <div class="ticket ${t.attention ? 'attention' : ''}">
-      <div class="row">
-        <div class="key">${t.key}</div>
-        <div>
-          <div class="summary">${t.summary}</div>
-          <div class="summary-sub">${t.just_did} <span class="ago">· ${t.ago}</span></div>
+  if (r.state === 'active') {
+    return `
+      <div class="routine">
+        <div class="icon">${icon}</div>
+        <div class="info">
+          <div class="name">${name}</div>
+          <div class="status ok">active${r.note ? ' · ' + r.note : ''}</div>
         </div>
-        <div>${statePill(t)}</div>
+        <div class="pulse"></div>
+      </div>`;
+  }
+  // polling routine
+  const status = r.status === 'warn'
+    ? `<span class="warn">${r.note || 'overdue'}</span>`
+    : `last ${r.last_poll_seconds_ago}s ago · next in ${Math.max(0, r.next_in)}s`;
+  return `
+    <div class="routine">
+      <div class="icon">${icon}</div>
+      <div class="info">
+        <div class="name">${name}${r.watching_count !== undefined ? ` · watching ${r.watching_count}` : ''}</div>
+        <div class="status ${r.status === 'warn' ? 'warn' : ''}">${status}</div>
       </div>
-      ${detailHtml}
-      ${actions ? `<div class="row bordered"><div></div><div></div><div class="actions">${actions}</div></div>` : ''}
+      <div class="pulse"></div>
     </div>`;
 }
 
-function renderActions(t) {
-  if (t.checkpoint === "pre_push") {
-    const primary = t.deploy_rec === 'deploy'
-      ? `<button class="btn btn-primary">Approve + Deploy</button>`
-      : `<button class="btn btn-primary">Approve, skip deploy</button>`;
+// ─── Kanban ───────────────────────────────────────────────────────
+function renderKanban() {
+  const hand = HANDS[current];
+  const all = hand.tickets.concat(hand.adhoc || []);
+
+  const byStage = {};
+  STAGES.forEach(s => byStage[s.key] = []);
+  all.forEach(t => { if (byStage[t.stage]) byStage[t.stage].push(t); });
+
+  const kanban = document.getElementById("kanban");
+  kanban.innerHTML = STAGES.map(s => {
+    const items = byStage[s.key];
+    const attentionCount = items.filter(t => t.attention).length;
     return `
-      ${primary}
-      <button class="btn btn-danger">Reject</button>
-      <button class="btn btn-takeover">⤵ Drop into chat</button>
-    `;
-  }
-  if (t.checkpoint === "plan_ready") {
-    return `
-      <button class="btn btn-primary">Approve plan</button>
-      <button class="btn">View full plan</button>
-      <button class="btn btn-danger">Reject</button>
-      <button class="btn btn-takeover">⤵ Drop into chat</button>
-    `;
-  }
-  if (t.ranch_state === "pr_review" && t.attention) {
-    return `
-      <button class="btn btn-primary">View comments + auto-respond</button>
-      <button class="btn">Take over manually</button>
-      <button class="btn btn-takeover">⤵ Drop into chat</button>
-    `;
-  }
-  if (t.ranch_state === "coding" || t.ranch_state === "testing") {
-    return `<button class="btn btn-takeover">⤵ Drop into chat</button>`;
-  }
-  return '';
+      <div class="col ${s.terminal ? 'terminal' : ''} ${attentionCount > 0 ? 'attention' : ''}">
+        <div class="col-header">
+          <div class="col-title">${s.label}</div>
+          <div class="col-counts">
+            ${attentionCount > 0 ? `<span class="col-attention">${attentionCount}⚠</span>` : ''}
+            <span class="col-count">${items.length}</span>
+          </div>
+        </div>
+        <div class="col-body">
+          ${items.length === 0
+            ? `<div class="empty-col">—</div>`
+            : items.map(t => renderCard(t)).join('')}
+        </div>
+      </div>`;
+  }).join('');
 }
 
-// ─── Render loop ─────────────────────────────────────────────────────
-let current = "max";
+function renderCard(t) {
+  const isSel = selectedCard === t.key;
+  const adhocCls = t.adhoc ? 'adhoc' : '';
+  return `
+    <div class="card ${t.attention ? 'attention' : ''} ${isSel ? 'selected' : ''}" onclick="openPanel('${t.key}')">
+      <div class="card-key ${adhocCls}">
+        <span>${t.key}</span>
+        ${t.attention ? '<span class="attention-glyph">⚠</span>' : ''}
+      </div>
+      <div class="card-summary">${t.summary}</div>
+      <div class="card-hint">${t.hint || ''}</div>
+    </div>`;
+}
+
+// ─── Side panel: decision packet ──────────────────────────────────
+function openPanel(key) {
+  const hand = HANDS[current];
+  const all = hand.tickets.concat(hand.adhoc || []);
+  const t = all.find(x => x.key === key);
+  if (!t) return;
+
+  selectedCard = key;
+  renderKanban();
+
+  document.getElementById("panelKey").textContent = t.key;
+  document.getElementById("panelSummary").textContent = t.summary;
+  document.getElementById("panelBody").innerHTML = renderPanel(t);
+  document.getElementById("sidePanel").classList.add("open");
+}
+
+function closePanel() {
+  document.getElementById("sidePanel").classList.remove("open");
+  selectedCard = null;
+  renderKanban();
+}
+
+function renderPanel(t) {
+  const goal = `
+    <div class="section goal">
+      <div class="section-label"><span class="section-num">1</span> GOAL</div>
+      <div class="section-content">${t.goal || '(no goal recorded — pulled from ticket title)'}</div>
+    </div>`;
+
+  let done = '';
+  if (t.done && t.done.length > 0) {
+    done = `
+      <div class="section done">
+        <div class="section-label"><span class="section-num">2</span> DONE</div>
+        <div class="section-content">
+          <ul class="done-list">
+            ${t.done.map((d, i) => `<li><span class="check">✓</span><span class="text ${i >= t.done.length - 2 ? 'recent' : ''}">${d}</span></li>`).join('')}
+          </ul>
+        </div>
+      </div>`;
+  }
+
+  let now = '';
+  if (t.now) {
+    now = `
+      <div class="section now">
+        <div class="section-label"><span class="section-num">2</span> NOW</div>
+        <div class="section-content">
+          <div class="now-block">
+            <div class="now-line">${t.now.line}</div>
+            <div class="now-meta">${t.now.meta}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // 3rd section: DECIDE if attention; WATCHING FOR otherwise
+  let third = '';
+  if (t.attention) {
+    third = renderDecide(t);
+  } else if (t.next_checkpoint || t.next_eta_seconds !== undefined) {
+    third = renderWatching(t);
+  }
+
+  return `${goal}${done}${now}${third}`;
+}
+
+function renderDecide(t) {
+  let prompt = '';
+  let body = '';
+
+  if (t.checkpoint === 'pre_push') {
+    prompt = `<strong>pre_push approval needed.</strong> The agent has finished implementation and verified locally. Acceptance is green. Operator should review the diff.`;
+    body += `
+      ${t.deploy_rec ? `<div class="recommendation ${t.deploy_rec === 'no-deploy' ? 'no-deploy' : ''}">
+        <span class="rec-label">${t.deploy_rec === 'deploy' ? '↓ DEPLOY recommended' : t.deploy_rec === 'no-deploy' ? '○ NO DEPLOY needed' : '? NEEDS REVIEW'}</span>
+        ${t.deploy_reason}
+      </div>` : ''}
+      ${t.diff ? `<div class="diff-list">
+        ${t.diff.map(f => `<div class="file"><span>${f.file}</span><span><span class="ins">+${f.ins}</span> <span class="del">-${f.del}</span></span></div>`).join('')}
+      </div>` : ''}
+      <div class="actions">
+        ${t.deploy_rec === 'deploy'
+          ? `<button class="btn btn-primary">Approve + Deploy</button>`
+          : `<button class="btn btn-primary">Approve, skip deploy</button>`}
+        <button class="btn btn-danger">Reject</button>
+        <button class="btn btn-takeover">⤵ Drop into chat</button>
+      </div>`;
+  } else if (t.checkpoint === 'plan_ready') {
+    prompt = `<strong>plan_ready approval needed.</strong> The agent has produced a plan + acceptance contract. Operator should review the plan before any code is written.`;
+    body += `
+      ${t.plan_preview ? `<div class="diff-list">
+        ${t.plan_preview.map((p, i) => `<div class="file"><span>${i + 1}. ${p}</span><span></span></div>`).join('')}
+      </div>` : ''}
+      ${t.deploy_rec ? `<div class="recommendation ${t.deploy_rec === 'no-deploy' ? 'no-deploy' : ''}">
+        <span class="rec-label">${t.deploy_rec === 'deploy' ? '↓ DEPLOY recommended (at pre_push)' : '○ NO DEPLOY (at pre_push)'}</span>
+        ${t.deploy_reason}
+      </div>` : ''}
+      <div class="actions">
+        <button class="btn btn-primary">Approve plan</button>
+        <button class="btn">View full proposal</button>
+        <button class="btn btn-danger">Reject</button>
+        <button class="btn btn-takeover">⤵ Drop into chat</button>
+      </div>`;
+  } else if (t.decide_kind === 'respond_to_review') {
+    prompt = `<strong>Review activity needs your call.</strong> The agent can auto-triage and respond, or you can take over the strategy.`;
+    body += `
+      ${t.comments_preview ? `<div class="diff-list">
+        ${t.comments_preview.map(c => `<div class="file"><span><strong style="color:var(--accent)">${c.author}:</strong> ${c.body}</span><span></span></div>`).join('')}
+      </div>` : ''}
+      ${t.ci === 'failed' ? `<div class="recommendation" style="border-color: var(--bad); color: var(--bad); background: var(--bad-soft);">
+        <span class="rec-label" style="color: var(--bad)">⚠ CI also failing</span>
+        Build went red 30s ago — likely related to the comment fix that just pushed.
+      </div>` : ''}
+      <div class="actions">
+        <button class="btn btn-primary">Auto-respond (agent triages + replies)</button>
+        <button class="btn">Take over manually</button>
+        <button class="btn btn-takeover">⤵ Drop into chat</button>
+      </div>`;
+  }
+
+  return `
+    <div class="section decide">
+      <div class="section-label"><span class="section-num">3</span> DECIDE</div>
+      <div class="section-content">
+        <div class="decide-prompt">${prompt}</div>
+        ${body}
+      </div>
+    </div>`;
+}
+
+function renderWatching(t) {
+  const pct = t.next_progress_pct || 0;
+  const etaSec = t.next_eta_seconds;
+  const etaStr = etaSec === null
+    ? '—'
+    : etaSec >= 60 ? `~${Math.round(etaSec/60)}m` : `~${etaSec}s`;
+
+  return `
+    <div class="section watching">
+      <div class="section-label"><span class="section-num">3</span> WATCHING FOR</div>
+      <div class="section-content">
+        <div class="watching-content">
+          <div class="next-check">
+            Next checkpoint: <strong>${t.next_checkpoint || 'pending'}</strong>
+            ${t.next_progress_pct !== undefined ? `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>` : ''}
+            ${t.next_eta_seconds !== undefined ? `<div class="eta">est. ${etaStr} away · operator action: none right now</div>` : ''}
+          </div>
+        </div>
+        <div style="margin-top: 12px; display: flex; gap: 8px;">
+          <button class="btn btn-takeover">⤵ Drop into chat (still ok during in-flight)</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────
 function render() {
   renderTabs();
-  renderHand();
+  renderRoutines();
+  renderKanban();
 }
-
 function tick() {
   const el = document.getElementById("clock");
   if (el) el.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
 }
+render(); tick(); setInterval(tick, 30_000);
 
-render();
-tick(); setInterval(tick, 30_000);
+// Click outside to close panel
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('sidePanel');
+  if (!panel.classList.contains('open')) return;
+  if (panel.contains(e.target)) return;
+  if (e.target.closest('.card')) return;
+  closePanel();
+});
 </script>
 </body>
 </html>
