@@ -96,10 +96,17 @@ def test_propose_system_prompt_requires_parked_final_state():
 
 
 def test_propose_system_prompt_specifies_acceptance_schema():
+    """The propose prompt must teach the agent the v1 acceptance check kinds.
+
+    Browser + figma_diff are v2 (H8 ships unit_test/script/http only); the
+    prompt deliberately doesn't mention them so the agent doesn't emit
+    checks the judge can't run.
+    """
     p = PROPOSE_SYSTEM_PROMPT
-    # Must mention each acceptance check kind
-    for kind in ("unit_tests", "scripts", "browser", "figma_diff"):
+    for kind in ("unit_test", "script", "http"):
         assert kind in p, f"acceptance kind '{kind}' missing from system prompt"
+    # Must mention the contract is consumed by run_acceptance
+    assert "run_acceptance" in p
 
 
 def test_propose_system_prompt_requires_details_field():

@@ -73,6 +73,30 @@ Don't update on every tool use — once per meaningful phase transition is
 the right cadence. Aim for at least one `record_state` call for every 5-10
 other tool calls.
 
+## Verifying your work with `run_acceptance`
+
+When the ticket has `acceptance` checks in its dossier (set during `ranch
+propose`), use the `run_acceptance` tool to verify your changes objectively
+before parking at pre_push. The tool runs every check and reports pass/fail
+per check, with stdout/stderr on failures.
+
+Flow:
+1. After you've made your changes and unit tests are green, call `run_acceptance`
+   (no arguments — it reads the dossier's acceptance list automatically).
+2. Read the results. Every `✓` is a real pass; every `✗` shows you what failed.
+3. If anything failed: fix the underlying issue (edit code, restart a server,
+   adjust config), then call `run_acceptance` again. Iterate until all pass.
+4. Do NOT call `record_checkpoint(kind="pre_push")` until acceptance is green —
+   the human relies on your acceptance results to trust the push.
+
+Budget: limited calls per session (default 8). Don't burn calls speculatively.
+If you exhaust the budget without passing, park at state=`parked` with
+blocker=`stuck_judge_budget_exhausted` so the operator can intervene.
+
+You may also pass inline `checks` to `run_acceptance` to verify ad-hoc things
+during development — but the canonical run after code-complete should be
+argument-free so it uses the propose-defined contract.
+
 ## Rules
 
 - Never push, open a PR, or create a branch without a `pre_push` approval.
@@ -138,6 +162,14 @@ encountered, conclusion. This is what the operator reads when they
 expand this stage in the UI. Skip `details` for routine transitions.
 
 Aim for at least one `record_state` call for every 5-10 other tool calls.
+
+## Verifying your work with `run_acceptance`
+
+If the run's dossier carries `acceptance` checks (from `ranch propose`), call
+`run_acceptance` after making changes to verify them objectively. The tool
+runs every check and reports pass/fail with stdout/stderr on failures. On
+failure, fix and re-call; iterate until green. Budget: limited calls per
+session — don't burn them speculatively.
 
 ## Other rules
 

@@ -3,6 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from ranch.runner.messages import (
+    AcceptanceCheck,
     CheckpointInput,
     DecisionLogInput,
     DossierOption,
@@ -228,6 +229,46 @@ def test_record_state_details_optional():
     """`details` is the long-form expand content — omitted for routine steps."""
     payload = RecordStateInput.model_validate(_minimal_state())
     assert payload.details is None
+
+
+def test_acceptance_check_unit_test_minimal():
+    c = AcceptanceCheck(kind="unit_test", name="pytest", cmd="pytest tests/", pass_pattern="passed")
+    assert c.kind == "unit_test"
+    assert c.timeout_seconds == 60.0  # default applied
+
+
+def test_acceptance_check_http_minimal():
+    c = AcceptanceCheck(kind="http", name="healthz", url="http://localhost:8000/healthz", expected_status=200)
+    assert c.url == "http://localhost:8000/healthz"
+
+
+def test_acceptance_check_rejects_bad_kind():
+    with pytest.raises(ValidationError):
+        AcceptanceCheck(kind="nonsense", name="x")  # type: ignore[arg-type]
+
+
+def test_acceptance_check_rejects_empty_name():
+    with pytest.raises(ValidationError, match="name must not be empty"):
+        AcceptanceCheck(kind="script", name="   ", cmd="echo hi", pass_pattern="hi")
+
+
+def test_record_state_accepts_acceptance_list():
+    payload = RecordStateInput.model_validate({
+        **_minimal_state(state="parked"),
+        "blocker": "Awaiting plan approval",
+        "acceptance": [
+            {"kind": "unit_test", "name": "pytest", "cmd": "pytest", "pass_pattern": "passed"},
+            {"kind": "http", "name": "healthz", "url": "http://localhost:8000/healthz", "expected_status": 200},
+        ],
+    })
+    assert len(payload.acceptance) == 2
+    assert payload.acceptance[0].kind == "unit_test"
+    assert payload.acceptance[1].url.endswith("/healthz")
+
+
+def test_record_state_acceptance_optional():
+    payload = RecordStateInput.model_validate(_minimal_state())
+    assert payload.acceptance is None
 
 
 def test_record_state_details_accepts_multiline():
