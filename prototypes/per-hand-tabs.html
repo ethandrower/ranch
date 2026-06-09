@@ -94,11 +94,134 @@
   .tab .hand-status.idle { background: var(--text-faint); }
   .topbar-right {
     padding: 0 16px;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 14px;
     color: var(--text-dim);
     font-size: 12px;
+    position: relative;
   }
   .topbar-right .meta { color: var(--text-faint); }
+
+  /* ─── Activity popout button + dropdown ─── */
+  .activity-trigger {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 10px 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    font-family: inherit;
+  }
+  .activity-trigger:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-2); }
+  .activity-trigger.has-unseen { border-color: var(--warn); color: var(--warn); }
+  .activity-trigger .glyph {
+    display: inline-block;
+    transition: transform 0.3s;
+  }
+  .activity-trigger.spinning .glyph { animation: rotate 2s linear infinite; }
+  @keyframes rotate { to { transform: rotate(360deg); } }
+  .activity-trigger .count {
+    background: var(--warn);
+    color: #1c1306;
+    font-size: 10px; font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 999px;
+    line-height: 13px;
+  }
+
+  .activity-popout {
+    position: absolute;
+    top: 100%;
+    right: 16px;
+    margin-top: 6px;
+    width: 360px;
+    background: var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+    z-index: 100;
+    display: none;
+  }
+  .activity-popout.open { display: block; }
+  .ap-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .ap-section { padding: 10px 14px; }
+  .ap-section + .ap-section { border-top: 1px solid var(--border); }
+  .ap-section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 8px;
+    font-weight: 700;
+  }
+  .ap-status-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .ap-status-row .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+  .ap-status-row .dot.idle { background: var(--text-faint); }
+  .ap-status-row .dot.warn { background: var(--warn); }
+  .ap-status-row .rname { flex: 1; color: var(--text); }
+  .ap-status-row .rstatus {
+    color: var(--text-dim);
+    font-family: "SF Mono", monospace;
+    font-size: 11px;
+  }
+  .ap-status-row .rstatus.warn { color: var(--warn); }
+
+  .ap-event {
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
+    gap: 8px;
+    padding: 7px 0;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .ap-event:last-child { border-bottom: none; }
+  .ap-event .ev-icon {
+    color: var(--warn);
+    font-size: 12.5px;
+  }
+  .ap-event .ev-icon.ok { color: var(--ok); }
+  .ap-event .ev-icon.bad { color: var(--bad); }
+  .ap-event .ev-icon.dim { color: var(--text-faint); }
+  .ap-event .ev-body {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .ap-event .ev-body .ev-detail {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+  .ap-event .ev-ago {
+    color: var(--text-faint);
+    font-size: 11px;
+    font-family: "SF Mono", monospace;
+    white-space: nowrap;
+  }
+  .ap-empty {
+    color: var(--text-faint);
+    font-size: 12px;
+    padding: 6px 0;
+    font-style: italic;
+  }
 
   /* ─── Routines comparison strip (shows BOTH concepts) ─── */
   .routines-bar {
@@ -228,10 +351,171 @@
   }
 
   /* ─── Kanban ─── */
+  /* ─── Initiative filter row ─── */
+  .scope-bar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px 11px;
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap;
+  }
+  .scope-bar .scope-label {
+    color: var(--text-faint);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    margin-right: 2px;
+  }
+  .scope-pill {
+    position: relative;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.12s;
+    overflow: hidden;  /* clip the progress fill */
+  }
+  /* Pill progress — a soft fill from left → right indicating fraction of
+     tickets that have reached the "merge" terminal stage. Sits BEHIND the
+     pill content via z-index. */
+  .scope-pill .pill-progress {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, rgba(126, 217, 178, 0.18), rgba(126, 217, 178, 0.10));
+    border-right: 1px solid rgba(126, 217, 178, 0.35);
+    z-index: 0;
+    pointer-events: none;
+    transition: width 0.25s ease;
+  }
+  .scope-pill > span { position: relative; z-index: 1; }
+  .scope-pill.active .pill-progress {
+    background: linear-gradient(90deg, rgba(10,15,28,0.22), rgba(10,15,28,0.10));
+    border-right-color: rgba(10,15,28,0.30);
+  }
+  .scope-pill .pill-frac {
+    color: var(--text-faint);
+    font-size: 10px;
+    font-weight: 600;
+    font-family: "SF Mono", monospace;
+  }
+  .scope-pill.active .pill-frac { color: rgba(10,15,28,0.75); }
+  .scope-pill:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-2); }
+  .scope-pill.active {
+    background: var(--accent);
+    color: #0a0f1c;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .scope-pill .pill-count {
+    background: rgba(0,0,0,0.20);
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 16px;
+  }
+  .scope-pill.active .pill-count {
+    background: rgba(0,0,0,0.25);
+  }
+  .scope-pill.active .pill-warn {
+    background: var(--warn);
+    color: #1c1306;
+  }
+  .scope-pill .pill-warn {
+    background: var(--warn);
+    color: #1c1306;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+  }
+
+  /* Drill-down breadcrumb */
+  .breadcrumb {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+  }
+  .breadcrumb .crumb {
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 3px 9px;
+    border-radius: 4px;
+  }
+  .breadcrumb .sep { color: var(--text-faint); }
+  .breadcrumb .clear {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 6px;
+  }
+  .breadcrumb .clear:hover { background: var(--panel-2); color: var(--text); }
+
+  /* Epic chip on cards */
+  .epic-chip {
+    background: var(--panel-3);
+    color: var(--text-dim);
+    font-family: "SF Mono", monospace;
+    font-size: 9.5px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    margin-left: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .epic-chip:hover {
+    border-color: var(--border-2);
+    color: var(--text);
+  }
+  /* Blocked card — desaturated with a dashed border so blocked work is
+     visually distinct without disappearing. The ⛔ chip links to the blocker. */
+  .card.blocked {
+    opacity: 0.65;
+    border-style: dashed;
+    background: var(--panel);
+  }
+  .card.blocked .card-summary { color: var(--text-dim); }
+  .blocked-chip {
+    background: rgba(255,107,107,0.10);
+    color: var(--bad);
+    border: 1px solid rgba(255,107,107,0.30);
+    font-family: "SF Mono", monospace;
+    font-size: 9.5px;
+    padding: 1px 6px;
+    border-radius: 2px;
+    margin-left: 6px;
+    cursor: pointer;
+  }
+  .blocked-chip:hover { background: rgba(255,107,107,0.18); color: var(--text); }
+  /* "⛔ N blocked" counter in the scope-bar */
+  .scope-blocked {
+    color: var(--bad);
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 4px;
+    background: rgba(255,107,107,0.10);
+    border: 1px solid rgba(255,107,107,0.30);
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+
   .kanban-wrap {
     overflow-x: auto;
     padding: 14px 16px 28px;
-    height: calc(100vh - 44px - 124px);  /* topbar + routines */
+    height: calc(100vh - 44px - 50px);  /* topbar + scope bar */
   }
   .kanban {
     display: grid;
@@ -357,11 +641,76 @@
     border-left: 1px solid var(--border-2);
     box-shadow: -8px 0 24px rgba(0,0,0,0.4);
     transform: translateX(100%);
-    transition: transform 0.25s ease;
+    transition: transform 0.25s ease, width 0.22s ease, max-width 0.22s ease;
     overflow-y: auto;
     display: flex; flex-direction: column;
   }
   .side-panel.open { transform: translateX(0); }
+  /* Wide mode — engaged when an expandable plan/stage entry is opened so
+     the reading content (multi-paragraph details) has room without forcing
+     in-panel scroll. Toggle on .side-panel; the body responds via flex. */
+  .side-panel.wide {
+    width: 1080px;
+    max-width: 90vw;
+  }
+  /* When expanded, push panel-body left to make room for the absolutely
+     positioned expand-pane on the right. */
+  .panel-body.has-expand { padding-right: 520px; }
+  .expand-pane {
+    position: absolute;
+    top: 50px;  /* below .panel-header */
+    right: 0; bottom: 0;
+    width: 500px;
+    border-left: 1px solid var(--border);
+    background: var(--panel-2);
+    padding: 18px 22px 32px;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  .expand-pane .ep-header {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-faint);
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .expand-pane .ep-close {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; cursor: pointer;
+  }
+  .expand-pane .ep-close:hover { background: var(--panel-3); color: var(--text); }
+  .expand-pane .ep-title {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .expand-pane .ep-body {
+    color: var(--text-dim);
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  /* Expandable list items in the side panel — done-list items become
+     clickable affordances; clicking opens the expand-pane. */
+  .done-list li.expandable {
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 2px 4px;
+    margin: 0 -4px;
+  }
+  .done-list li.expandable:hover { background: var(--panel-2); }
+  .done-list li.expandable.active { background: var(--panel-3); }
+  .done-list li.expandable .text::after {
+    content: " ▸";
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+  .done-list li.expandable.active .text::after { content: " ▾"; }
   .panel-header {
     padding: 14px 20px;
     border-bottom: 1px solid var(--border);
@@ -580,22 +929,25 @@
     <div class="brand"><span class="brand-dot"></span>Ranch</div>
     <div class="tabs" id="tabs"></div>
     <div class="topbar-right">
+      <button id="activityTrigger" class="activity-trigger" onclick="toggleActivity(event)">
+        <span class="glyph">⟳</span>
+        <span>Activity</span>
+        <span class="count" id="activityCount" style="display:none">0</span>
+      </button>
       <span class="meta" id="clock"></span>
       <span class="meta">●  4 hands running</span>
+
+      <div class="activity-popout" id="activityPopout" onclick="event.stopPropagation()">
+        <div class="ap-header">
+          <span>⟳ Activity · <span id="apHandName">max</span></span>
+          <span style="text-transform: none; letter-spacing: 0; color: var(--text-faint); font-weight: 400">snapshot at <span id="apClock"></span></span>
+        </div>
+        <div id="apBody"></div>
+      </div>
     </div>
   </div>
 
-  <!-- Routines area: showing BOTH concepts so we can pick -->
-  <div class="routines-bar">
-    <div class="routines-header">
-      <div class="label">⟳ Hand routines · <span id="routinesHandName">max</span></div>
-      <div class="routines-toggle">
-        <button id="rtStrip" class="active" onclick="setRoutines('strip')">Concept A — Always-visible strip</button>
-        <button id="rtEvent" onclick="setRoutines('event')">Concept B — Only when events fire</button>
-      </div>
-    </div>
-    <div id="routinesContent"></div>
-  </div>
+  <div class="scope-bar" id="scopeBar"></div>
 
   <div class="kanban-wrap">
     <div class="kanban" id="kanban"></div>
@@ -613,7 +965,7 @@
   </div>
 
   <div class="footer-hint" id="footerHint">
-    Prototype v3 · click any card → side panel opens with Goal / Done / Now / Decide (or Watching for).
+    Prototype v4 · board-per-initiative (switch with pills) · click an epic chip to drill in · click a done step to expand the drawer for details.
   </div>
 
 <script>
@@ -636,9 +988,18 @@ const STAGES = [
 // ───────────────────────────────────────────────────────────────────
 // Mock data shaped roughly the way the live ranch.db would expose it.
 // ───────────────────────────────────────────────────────────────────
+const INITIATIVES = {
+  "ref-mgmt": "Reference Management",
+  "scrapers": "Scrapers infra",
+  "perf":     "Performance",
+  "misc":     "Misc & one-offs",
+};
+
 const HANDS = {
   max: {
     label: "max", status: "running",
+    initiatives: ["ref-mgmt", "misc"],   // which initiatives this hand watches
+    default_initiative: "ref-mgmt",
     routines: {
       jira_triage:  {last_poll_seconds_ago: 12, next_in: 18, status: "ok"},
       pr_comments:  {last_poll_seconds_ago: 47, next_in: 73, status: "ok", watching_count: 2},
@@ -648,27 +1009,37 @@ const HANDS = {
     events: [
       {kind: "ci_flip", ticket: "ECD-1762", from: "running", to: "failed", ago: "30s"},
     ],
+    events_log: [
+      {icon: "⚡", severity: "bad",   title: "CI failed on PR #1834 (ECD-1762)",  detail: "build went running → failed",                                              ago: "30s"},
+      {icon: "💬", severity: "info",  title: "2 new review comments on ECD-1762",  detail: "from vinod; auto-triage queued",                                           ago: "4m"},
+      {icon: "↪",  severity: "info",  title: "Triaged ECD-2073 → propose",         detail: "score 78, top of queue",                                                    ago: "12m"},
+      {icon: "✓",  severity: "good",  title: "Approved propose ECD-2087 → exec",    detail: "operator approval received; execute started",                              ago: "18m"},
+      {icon: "⟳",  severity: "info",  title: "Jira poll · 3 new candidates",        detail: "added to triage queue",                                                     ago: "26m"},
+      {icon: "↪",  severity: "info",  title: "Triaged ECD-1880 → execute",          detail: "carried plan from previous propose",                                       ago: "32m"},
+    ],
     tickets: [
       {
-        key: "ECD-2105", stage: "triage",
+        key: "ECD-2105", initiative: "ref-mgmt", epic: "ECD-2100", stage: "triage",
         summary: "Improve search hit caching",
         hint: "score 78 — in queue",
         goal: "Reduce repeat search-hit DB hits on the lit-review index page; we're seeing 8+ identical queries per page load.",
       },
       {
-        key: "ECD-2099", stage: "triage",
+        key: "ECD-2099", initiative: "misc", epic: null, stage: "triage",
         summary: "Add pagination headers to /api/articles",
-        hint: "score 62",
+        hint: "score 62 · drive-by",
         goal: "Expose Link headers so external consumers can paginate without parsing the body.",
       },
       {
-        key: "ECD-2078", stage: "triage",
+        key: "ECD-2078", initiative: "ref-mgmt", epic: "ECD-2000", stage: "triage",
         summary: "Migrate old search endpoint to v3",
-        hint: "score 45",
+        hint: "blocked — waiting on ECD-2073 plan call",
         goal: "Sunset /api/search/v1 in favor of v3 which has consistent return shapes.",
+        blocked_by: "ECD-2073",
+        blocked_reason: "Migration shape depends on the worker-scaling decision pending in ECD-2073's plan_ready review. Park here until that's resolved to avoid cascading rework.",
       },
       {
-        key: "ECD-2073", stage: "plan",
+        key: "ECD-2073", initiative: "ref-mgmt", epic: "ECD-2000", stage: "plan",
         summary: "Performance deploy — Celery worker scaling",
         hint: "parked · 12m",
         attention: true,
@@ -694,7 +1065,7 @@ const HANDS = {
         deploy_reason: "needs release-phase validation in realistic Procfile",
       },
       {
-        key: "ECD-1880", stage: "code",
+        key: "ECD-1880", initiative: "ref-mgmt", epic: "ECD-1850", stage: "code",
         summary: "Add audit log for migration runs",
         hint: "▸ 3 of 7 plan steps",
         attention: false,
@@ -712,7 +1083,7 @@ const HANDS = {
         next_progress_pct: 38,
       },
       {
-        key: "ECD-2087", stage: "pre_push",
+        key: "ECD-2087", initiative: "ref-mgmt", epic: "ECD-2050", stage: "pre_push",
         summary: "Restore post-scrape dedup dispatch",
         hint: "parked · 2m · deploy?",
         attention: true,
@@ -737,7 +1108,7 @@ const HANDS = {
         deploy_reason: "acceptance has a real scraper integration check that needs the remote scraper fleet to validate end-to-end",
       },
       {
-        key: "ECD-1762", stage: "review",
+        key: "ECD-1762", initiative: "ref-mgmt", epic: "ECD-1700", stage: "review",
         summary: "Citation export — DOI formatting",
         hint: "2 new comments · 4m",
         attention: true,
@@ -759,7 +1130,29 @@ const HANDS = {
         ],
       },
       {
-        key: "ECD-1623", stage: "pr_open",
+        key: "ECD-2055", initiative: "ref-mgmt", epic: "ECD-1850", stage: "merge",
+        summary: "Unified DOI parser — landed last sprint",
+        hint: "merged 2d ago",
+        goal: "Consolidate three near-identical DOI parsers into one.",
+        done: ["Implementation", "Acceptance 5/5 green", "Merged to develop"],
+        now: {
+          line: "Merged and rolled out 2 days ago. No regressions observed.",
+          meta: "PR #1812 · 3 commits",
+        },
+      },
+      {
+        key: "ECD-2032", initiative: "ref-mgmt", epic: "ECD-2000", stage: "merge",
+        summary: "Search-index rebuild cron",
+        hint: "merged 4d ago",
+        goal: "Schedule nightly rebuild of the search index to catch drift.",
+        done: ["Cron wired", "Acceptance 3/3 green", "Merged"],
+        now: {
+          line: "Stable since merge 4 days ago. Cron firing at 3am UTC nightly.",
+          meta: "PR #1789",
+        },
+      },
+      {
+        key: "ECD-1623", initiative: "misc", epic: null, stage: "pr_open",
         summary: "Scrape worker timeout handling",
         hint: "ci ✓ · no reviewers",
         attention: false,
@@ -780,7 +1173,7 @@ const HANDS = {
     ],
     adhoc: [
       {
-        key: "(no ticket)", stage: "code", adhoc: true,
+        key: "(no ticket)", initiative: "misc", epic: null, stage: "code", adhoc: true,
         summary: "Investigating shared scraper broker queue depth",
         hint: "researching",
         goal: "Operator asked: why is the DEV_max queue at 124 entries? Is this a leak or just normal backlog?",
@@ -797,6 +1190,8 @@ const HANDS = {
   },
   jeffy: {
     label: "jeffy", status: "running",
+    initiatives: ["ref-mgmt", "scrapers", "misc"],
+    default_initiative: "ref-mgmt",
     routines: {
       jira_triage:  {last_poll_seconds_ago: 28, next_in: 2, status: "ok"},
       pr_comments:  {last_poll_seconds_ago: 84, next_in: 36, status: "ok", watching_count: 1},
@@ -804,15 +1199,19 @@ const HANDS = {
       self_review:  {state: "active", note: "running on ECD-1853"},
     },
     events: [],
+    events_log: [
+      {icon: "✓",  severity: "good",  title: "run_acceptance · 4/4 green",     detail: "tests + smoke + integration; about to park at pre_push", ago: "30s"},
+      {icon: "⟳",  severity: "info",  title: "Jira poll · 0 new candidates",   detail: "queue stable",                                            ago: "5m"},
+    ],
     tickets: [
       {
-        key: "ECD-2071", stage: "triage",
+        key: "ECD-2071", initiative: "scrapers", epic: "ECD-2060", stage: "triage",
         summary: "PubMed search — handle 429 backoff cleanly",
         hint: "score 72",
         goal: "Currently 429 from NCBI throws to Sentry instead of backing off + retrying.",
       },
       {
-        key: "ECD-1853", stage: "verify",
+        key: "ECD-1853", initiative: "ref-mgmt", epic: "ECD-1800", stage: "verify",
         summary: "Lit-reviews migration merge fix",
         hint: "▸ acceptance",
         attention: false,
@@ -831,7 +1230,7 @@ const HANDS = {
         next_progress_pct: 85,
       },
       {
-        key: "ECD-1720", stage: "review",
+        key: "ECD-1720", initiative: "ref-mgmt", epic: "ECD-1700", stage: "review",
         summary: "Article preview pagination",
         hint: "3h · no comments",
         attention: false,
@@ -850,6 +1249,8 @@ const HANDS = {
   },
   arnold: {
     label: "arnold", status: "running",
+    initiatives: ["scrapers", "perf", "misc"],
+    default_initiative: "scrapers",
     routines: {
       jira_triage:  {last_poll_seconds_ago: 15, next_in: 15, status: "ok"},
       pr_comments:  {last_poll_seconds_ago: 360, next_in: -240, status: "warn", watching_count: 1, note: "1 unresolved comment, last check 6m ago"},
@@ -859,15 +1260,20 @@ const HANDS = {
     events: [
       {kind: "review_comment", ticket: "ECD-1410", author: "mohamed", body: "Why rebuild on every dispatch? The whole point of the cached parse was to avoid this. Push back unless I'm missing something.", ago: "6m"},
     ],
+    events_log: [
+      {icon: "💬", severity: "info",  title: "Review push-back from mohamed", detail: "on ECD-1410 — re scope of index rebuild",      ago: "6m"},
+      {icon: "⚠",  severity: "bad",   title: "PR comment poll overdue",      detail: "last check 6m ago; cadence is 120s",            ago: "6m"},
+      {icon: "✓",  severity: "good",  title: "run_acceptance · 3/3 green on ECD-1644", detail: "MAUDE rate-limit fix",              ago: "22m"},
+    ],
     tickets: [
       {
-        key: "ECD-1955", stage: "triage",
+        key: "ECD-1955", initiative: "ref-mgmt", epic: "ECD-1800", stage: "triage",
         summary: "Refactor lit_reviews/serializers.py base class",
         hint: "score 56",
         goal: "Pull repeated patterns up to a base serializer to remove ~120 lines of duplication.",
       },
       {
-        key: "ECD-2087", stage: "plan",
+        key: "ECD-2087", initiative: "ref-mgmt", epic: "ECD-2050", stage: "plan",
         summary: "Restore post-scrape dedup dispatch (collision with max's)",
         hint: "parked · 8m · DUPE",
         attention: true,
@@ -885,7 +1291,7 @@ const HANDS = {
         deploy_reason: "duplicate work with max's ECD-2087",
       },
       {
-        key: "ECD-1644", stage: "pre_push",
+        key: "ECD-1644", initiative: "scrapers", epic: "ECD-1600", stage: "pre_push",
         summary: "MAUDE adverse-event ingester rate limit",
         hint: "parked · 22m · no deploy",
         attention: true,
@@ -908,7 +1314,7 @@ const HANDS = {
         deploy_reason: "all acceptance is unit_test + script (localhost) — change is contained logic, no UI / no public URL",
       },
       {
-        key: "ECD-1410", stage: "review",
+        key: "ECD-1410", initiative: "perf", epic: "ECD-1400", stage: "review",
         summary: "Worker spatial pre-parse — index rebuild",
         hint: "1 push-back · 6m",
         attention: true,
@@ -933,6 +1339,8 @@ const HANDS = {
   },
   kesha: {
     label: "kesha", status: "idle",
+    initiatives: ["scrapers", "misc"],
+    default_initiative: "scrapers",
     routines: {
       jira_triage:  {last_poll_seconds_ago: 4, next_in: 26, status: "ok", note: "0 viable candidates last poll"},
       pr_comments:  {last_poll_seconds_ago: 110, next_in: 10, status: "ok", watching_count: 1},
@@ -940,9 +1348,13 @@ const HANDS = {
       self_review:  {state: "idle"},
     },
     events: [],
+    events_log: [
+      {icon: "⟳", severity: "info", title: "Jira poll · 0 viable candidates", detail: "queue stable; sleeping until next poll", ago: "4s"},
+      {icon: "🟰", severity: "info", title: "PR #1580 idle 2 days",            detail: "no review activity; nothing to do",      ago: "2d"},
+    ],
     tickets: [
       {
-        key: "ECD-1410", stage: "review",
+        key: "ECD-1410", initiative: "scrapers", epic: "ECD-1400", stage: "review",
         summary: "PubMed callback signing v2",
         hint: "2d · no activity",
         attention: false,
@@ -962,8 +1374,38 @@ const HANDS = {
 };
 
 let current = "max";
-let routinesMode = "strip";
 let selectedCard = null;
+let activityOpen = false;
+// Initiative scoping — board shows one initiative at a time, switched via
+// pills. drilledEpic narrows further to a single epic within the current
+// initiative (set by clicking an epic chip on a card).
+let currentInitiative = {max: "ref-mgmt", jeffy: "ref-mgmt", arnold: "scrapers", kesha: "scrapers"};
+let drilledEpic = {max: null, jeffy: null, arnold: null, kesha: null};
+let expandedStep = null;  // {ticketKey, index} — drives wide-mode + expand-pane
+// In a real impl this would be persisted per-operator across sessions; for the
+// prototype we just track unseen events since the popout was last opened.
+let activitySeenAt = {max: 0, jeffy: 0, arnold: 0, kesha: 0};
+
+// Per-step details — keyed by `${ticketKey}::${index}` — surfaced in the
+// expand pane when a done-list step is clicked. Skipped steps fall back to
+// a generic "(no extra notes for this step)" message.
+const STEP_DETAILS = {
+  // max — ECD-2087 (pre_push, parked for operator deploy decision)
+  "ECD-2087::0": "Read scrape dispatch flow end-to-end: `lit_reviews/dedup/dispatch.py` → `lit_reviews/tasks.py` → the post-scrape consumer in `scrapers/post_scrape.py`. Found the dispatch hook was removed in commit 0317 when the dedup module was split — the post-scrape consumer kept calling it but the no-op stub silently returned without doing anything. That's the silent data loss.",
+  "ECD-2087::1": "Restored the post-dedup dispatch step in `lit_reviews/dedup/dispatch.py`. Re-implemented `dispatch_post_dedup(...)` to take the same args the consumer was passing (run_id, batch_size). The old impl was lost in the 0317 commit; rewrote against the consumer's contract.\n\nDecision: kept the function sync, not async. The consumer was already calling it from inside an async task — no benefit to async-ifying the inner step.",
+  "ECD-2087::2": "Wired the onComplete callback in `lit_reviews/tasks.py` so that the scrape task fires `dispatch_post_dedup` after the scrape batch completes. Threaded the run_id through the chord signature. Verified the callback fires before the task is marked complete (otherwise we'd race the next batch).",
+  "ECD-2087::3": "Acceptance contract: 4 checks. pytest tests/test_dedup_dispatch.py (3 cases — dispatch fires, dispatch skipped on empty batch, dispatch retried on transient error), plus a scraper integration check against the local fake-scrape fixture. All 4 green in 22s.\n\nThe scraper integration check is the reason `deploy` is recommended — it can't be run locally against the real scraper fleet, and staging is the only place to validate end-to-end.",
+  // max — ECD-1880 (code, in flight)
+  "ECD-1880::0": "Migration hook lives in `core/migrations/runner.py`. Single entry point — `apply_migrations(env)` — which iterates pending migrations and calls each one's `forward()`. No existing audit log; failures land in Sentry but successes are silent.\n\nDecided to hook at `runner.apply_migrations`, not inside each migration, so the audit guarantee is centralized.",
+  "ECD-1880::1": "Wrote a failing test `test_audit_log_writer.py::test_audit_row_per_migration` that asserts: after `apply_migrations` runs N migrations, the `migration_audit` table has N rows with the expected (name, env, applied_at, sha, success) shape. Test fails because the table doesn't exist yet.",
+  // arnold's pre-existing entries
+  "ECD-1644::0": "Reproduced the 429 storm by hammering the dev ingester with a tight burst (50 docs / 5s). The MAUDE upstream surfaces a Retry-After header on most 429s but not all — about 1 in 8 returns the raw 429 with no header, which broke the naive sleep-on-header path.",
+  "ECD-1644::1": "Switched to exponential backoff with jitter: 1s → 2s → 4s → 8s → 16s, capped at 30s, 5 retries total. When Retry-After is present and within the cap we honor it; otherwise we fall back to the backoff curve. Logged a single warn per cycle (not per retry) to keep Sentry quiet.",
+  "ECD-1644::2": "Acceptance: `pytest tests/test_maude_ratelimit.py` (3 cases — header present, header missing, max-retries exhausted) + a curl smoke against a local fake-MAUDE Flask app. 3/3 green; took 18s total. No public-URL probe in the contract — this is contained logic, no deploy needed.",
+  "ECD-1410::0": "Implementation: moved the cached-parse fingerprint to a stable hash of the input doc, not the timestamp. Index rebuild now keys on the hash, not the dispatch id. Diff was ~80 lines across 3 files.",
+  "ECD-1410::1": "Acceptance 4/4: unit tests on the hash stability, a script that dispatches 500 docs and counts index rebuilds (expect ≤1), an http probe against /worker/health, and a benchmark assert that the pre-parse step stays under 200ms p99.",
+  "ECD-1410::2": "PR #1620 opened against develop. CI passed in ~6min. Then mohamed pushed back on the approach 6m ago — he believes the fingerprint key is wrong and a cached parse should suffice. Awaiting strategy call.",
+};
 
 // ─── Tabs ─────────────────────────────────────────────────────────
 function renderTabs() {
@@ -981,111 +1423,189 @@ function renderTabs() {
     `;
     tab.onclick = () => {
       current = k; closePanel();
+      // Switching hands resets initiative drill-down to the hand's default.
+      drilledEpic[current] = null;
       render();
     };
     el.appendChild(tab);
   });
 }
 
-// ─── Routines area ────────────────────────────────────────────────
-function setRoutines(mode) {
-  routinesMode = mode;
-  document.getElementById("rtStrip").classList.toggle("active", mode === "strip");
-  document.getElementById("rtEvent").classList.toggle("active", mode === "event");
-  renderRoutines();
-}
-
-function renderRoutines() {
-  document.getElementById("routinesHandName").textContent = current;
-  const wrap = document.getElementById("routinesContent");
+// ─── Scope bar (initiative pills + epic breadcrumb) ───────────────
+function renderScopeBar() {
+  const bar = document.getElementById("scopeBar");
   const hand = HANDS[current];
+  const all = hand.tickets.concat(hand.adhoc || []);
 
-  if (routinesMode === "strip") {
-    wrap.innerHTML = `
-      <div class="routines-strip">
-        ${renderRoutine("⟳", "Jira triage", hand.routines.jira_triage)}
-        ${renderRoutine("💬", "PR comments", hand.routines.pr_comments)}
-        ${renderRoutine("✓", "CI status", hand.routines.ci_status)}
-        ${renderRoutine("👁", "Self-review", hand.routines.self_review)}
-      </div>
-      <div class="hint-row">
-        Concept A: persistent visibility of background routines. Tradeoff — eats screen
-        space even when nothing's happening; operator may tune it out (banner blindness).
-      </div>
-    `;
-  } else {
-    const events = hand.events || [];
-    if (events.length === 0) {
-      wrap.innerHTML = `
-        <div class="routines-event">
-          No recent routine events. The bar surfaces only when something fires.
-        </div>
-        <div class="hint-row">
-          Concept B: silent unless an event fires (CI flipped, comment arrived, etc.).
-          Tradeoff — no proof of life when quiet; operator may wonder "is the hand even running?"
-          <div class="pretend">↓ Pretend this just happened ↓</div>
-        </div>
-        <div class="routines-event has-event" style="margin-top: 8px">
-          <span class="event-icon">⚡</span>
-          <div class="event-body">
-            <div><strong>CI failed</strong> on PR #1834 (ECD-1762)</div>
-            <div style="color: var(--text-dim); font-size: 11.5px; margin-top: 2px;">build went <span style="color: var(--ok)">running</span> → <span style="color: var(--bad)">failed</span></div>
-          </div>
-          <div class="event-ago">30s ago</div>
-        </div>
-      `;
-    } else {
-      const banners = events.map(ev => `
-        <div class="routines-event has-event" style="margin-bottom: 6px">
-          <span class="event-icon">⚡</span>
-          <div class="event-body">
-            ${ev.kind === 'ci_flip' ? `<div><strong>CI ${ev.to}</strong> on ${ev.ticket}</div><div style="color: var(--text-dim); font-size: 11.5px; margin-top: 2px;">build went ${ev.from} → ${ev.to}</div>` : ''}
-            ${ev.kind === 'review_comment' ? `<div><strong>${ev.author}</strong> commented on ${ev.ticket}</div><div style="color: var(--text-dim); font-size: 11.5px; margin-top: 2px; font-style: italic">"${ev.body.slice(0, 90)}${ev.body.length > 90 ? '…' : ''}"</div>` : ''}
-          </div>
-          <div class="event-ago">${ev.ago}</div>
-        </div>
-      `).join('');
-      wrap.innerHTML = banners + `<div class="hint-row">Concept B: event-driven. Quiet when nothing happens.</div>`;
-    }
+  // Counts, attention, blocked, and progress per initiative key.
+  // Progress = merged / total. (Could also count "review" + "pr_open" as
+  // near-done — left as merged-only for now to keep the signal crisp.)
+  const stats = {};
+  (hand.initiatives || []).forEach(k => stats[k] = {count: 0, attention: 0, blocked: 0, merged: 0});
+  all.forEach(t => {
+    const k = t.initiative || "misc";
+    if (!stats[k]) stats[k] = {count: 0, attention: 0, blocked: 0, merged: 0};
+    stats[k].count += 1;
+    if (t.attention) stats[k].attention += 1;
+    if (t.blocked_by) stats[k].blocked += 1;
+    if (t.stage === "merge") stats[k].merged += 1;
+  });
+
+  const initiativesOrder = hand.initiatives || Object.keys(stats);
+  const cur = currentInitiative[current];
+
+  const pills = initiativesOrder.map(k => {
+    const s = stats[k] || {count: 0, attention: 0, blocked: 0, merged: 0};
+    const active = k === cur ? "active" : "";
+    const pct = s.count === 0 ? 0 : Math.round((s.merged / s.count) * 100);
+    return `
+      <button class="scope-pill ${active}" onclick="setInitiative('${k}')" title="${s.merged}/${s.count} merged · ${s.attention} need attention${s.blocked ? ' · ' + s.blocked + ' blocked' : ''}">
+        <span class="pill-progress" style="width: ${pct}%"></span>
+        <span>${INITIATIVES[k] || k}</span>
+        <span class="pill-count">${s.count}</span>
+        <span class="pill-frac">${s.merged}/${s.count}</span>
+        ${s.attention > 0 ? `<span class="pill-warn">${s.attention}⚠</span>` : ''}
+      </button>`;
+  }).join("");
+
+  // Cross-initiative blocked count — surfaces cascading-risk at a glance.
+  const totalBlocked = Object.values(stats).reduce((a, s) => a + s.blocked, 0);
+  const blockedBadge = totalBlocked > 0
+    ? `<span class="scope-blocked" title="Tickets blocked by another ticket's decision">⛔ ${totalBlocked} blocked</span>`
+    : "";
+
+  const epic = drilledEpic[current];
+  const crumb = epic ? `
+    <div class="breadcrumb">
+      <span>drilled into</span>
+      <span class="crumb">${epic}</span>
+      <button class="clear" onclick="clearEpicDrill()">clear ✕</button>
+    </div>` : "";
+
+  bar.innerHTML = `<span class="scope-label">Initiative</span>${pills}${blockedBadge}${crumb}`;
+}
+
+function setInitiative(key) {
+  currentInitiative[current] = key;
+  drilledEpic[current] = null;
+  closePanel();
+  render();
+}
+
+function setEpicDrill(epic) {
+  drilledEpic[current] = epic;
+  closePanel();
+  render();
+}
+
+function clearEpicDrill() {
+  drilledEpic[current] = null;
+  render();
+}
+
+// ─── Activity popout ──────────────────────────────────────────────
+function toggleActivity(e) {
+  if (e) e.stopPropagation();
+  activityOpen = !activityOpen;
+  document.getElementById("activityPopout").classList.toggle("open", activityOpen);
+  if (activityOpen) {
+    // Mark events seen
+    activitySeenAt[current] = Date.now();
+    renderActivityTrigger();
+    renderActivityPopout();
   }
 }
 
-function renderRoutine(icon, name, r) {
-  if (r.state === 'idle') {
-    return `
-      <div class="routine idle">
-        <div class="icon">${icon}</div>
-        <div class="info">
-          <div class="name">${name}</div>
-          <div class="status">idle ${r.note ? '· ' + r.note : ''}</div>
-        </div>
-        <div class="pulse"></div>
-      </div>`;
+function renderActivityTrigger() {
+  const hand = HANDS[current];
+  const trigger = document.getElementById("activityTrigger");
+  const countEl = document.getElementById("activityCount");
+  // Count "unseen" events since last open. For the prototype we treat any
+  // event with ago in seconds < some threshold as unseen if popout has not
+  // been opened recently. Simpler model: count events newer than 5 minutes.
+  const unseen = (hand.events || []).filter(e => {
+    if (e.ago.endsWith('s')) return true;
+    if (e.ago.endsWith('m')) return parseInt(e.ago) < 10;
+    return false;
+  }).length;
+  if (unseen > 0 && !activityOpen) {
+    countEl.textContent = unseen;
+    countEl.style.display = "inline-block";
+    trigger.classList.add("has-unseen");
+  } else {
+    countEl.style.display = "none";
+    trigger.classList.remove("has-unseen");
   }
-  if (r.state === 'active') {
+}
+
+function renderActivityPopout() {
+  if (!activityOpen) return;
+  const hand = HANDS[current];
+  document.getElementById("apHandName").textContent = current;
+  document.getElementById("apClock").textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+
+  const body = document.getElementById("apBody");
+
+  // STATUS — what each routine is doing right now
+  const statusRows = [
+    {name: "Jira triage",  icon: "⟳", r: hand.routines.jira_triage},
+    {name: "PR comments",  icon: "💬", r: hand.routines.pr_comments},
+    {name: "CI status",    icon: "✓", r: hand.routines.ci_status},
+    {name: "Self-review",  icon: "👁", r: hand.routines.self_review},
+  ];
+
+  const statusHtml = statusRows.map(({name, icon, r}) => {
+    let statusText, dotCls = '';
+    if (r.state === 'idle') {
+      statusText = `<span style="color: var(--text-faint)">idle${r.note ? ' · ' + r.note : ''}</span>`;
+      dotCls = 'idle';
+    } else if (r.state === 'active') {
+      statusText = `<span style="color: var(--ok)">active${r.note ? ' · ' + r.note : ''}</span>`;
+    } else {
+      // polling routine
+      if (r.status === 'warn') {
+        statusText = `<span class="warn">${r.note || 'overdue'}</span>`;
+        dotCls = 'warn';
+      } else {
+        const watching = r.watching_count !== undefined ? ` · watching ${r.watching_count}` : '';
+        statusText = `next in ${Math.max(0, r.next_in)}s${watching}`;
+      }
+    }
     return `
-      <div class="routine">
-        <div class="icon">${icon}</div>
-        <div class="info">
-          <div class="name">${name}</div>
-          <div class="status ok">active${r.note ? ' · ' + r.note : ''}</div>
-        </div>
-        <div class="pulse"></div>
+      <div class="ap-status-row">
+        <span class="dot ${dotCls}"></span>
+        <span class="rname">${icon} ${name}</span>
+        <span class="rstatus ${r.status === 'warn' ? 'warn' : ''}">${statusText}</span>
       </div>`;
-  }
-  // polling routine
-  const status = r.status === 'warn'
-    ? `<span class="warn">${r.note || 'overdue'}</span>`
-    : `last ${r.last_poll_seconds_ago}s ago · next in ${Math.max(0, r.next_in)}s`;
-  return `
-    <div class="routine">
-      <div class="icon">${icon}</div>
-      <div class="info">
-        <div class="name">${name}${r.watching_count !== undefined ? ` · watching ${r.watching_count}` : ''}</div>
-        <div class="status ${r.status === 'warn' ? 'warn' : ''}">${status}</div>
-      </div>
-      <div class="pulse"></div>
-    </div>`;
+  }).join('');
+
+  // RECENT EVENTS — newest first
+  const events = hand.events_log || [];
+  const eventsHtml = events.length === 0
+    ? `<div class="ap-empty">No recent events.</div>`
+    : events.map(e => {
+        const iconCls = e.severity === 'good' ? 'ok' : e.severity === 'bad' ? 'bad' : e.severity === 'info' ? 'dim' : '';
+        return `
+          <div class="ap-event">
+            <span class="ev-icon ${iconCls}">${e.icon}</span>
+            <div class="ev-body">
+              ${e.title}
+              ${e.detail ? `<div class="ev-detail">${e.detail}</div>` : ''}
+            </div>
+            <span class="ev-ago">${e.ago}</span>
+          </div>`;
+      }).join('');
+
+  body.innerHTML = `
+    <div class="ap-section">
+      <div class="ap-section-label">Routines · current state</div>
+      ${statusHtml}
+    </div>
+    <div class="ap-section">
+      <div class="ap-section-label">Recent activity</div>
+      ${eventsHtml}
+    </div>
+  `;
 }
 
 // ─── Kanban ───────────────────────────────────────────────────────
@@ -1093,9 +1613,20 @@ function renderKanban() {
   const hand = HANDS[current];
   const all = hand.tickets.concat(hand.adhoc || []);
 
+  // Filter by current initiative; further filter by drilled epic if set.
+  // Tickets without an `initiative` fall into "misc".
+  const initKey = currentInitiative[current];
+  const epicKey = drilledEpic[current];
+  const visible = all.filter(t => {
+    const ti = t.initiative || "misc";
+    if (ti !== initKey) return false;
+    if (epicKey && t.epic !== epicKey) return false;
+    return true;
+  });
+
   const byStage = {};
   STAGES.forEach(s => byStage[s.key] = []);
-  all.forEach(t => { if (byStage[t.stage]) byStage[t.stage].push(t); });
+  visible.forEach(t => { if (byStage[t.stage]) byStage[t.stage].push(t); });
 
   const kanban = document.getElementById("kanban");
   kanban.innerHTML = STAGES.map(s => {
@@ -1122,10 +1653,21 @@ function renderKanban() {
 function renderCard(t) {
   const isSel = selectedCard === t.key;
   const adhocCls = t.adhoc ? 'adhoc' : '';
+  const epic = t.epic
+    ? `<span class="epic-chip" title="Drill into ${t.epic}" onclick="event.stopPropagation(); setEpicDrill('${t.epic}')">${t.epic}</span>`
+    : '';
+  // Blocked-by chip — clicking it scrolls/navigates to the blocker by
+  // opening its panel (no-op if the blocker isn't in current view, but
+  // the chip still makes the dependency visible).
+  const blocked = t.blocked_by
+    ? `<span class="blocked-chip" title="Blocked by ${t.blocked_by} — ${t.blocked_reason || 'awaits its decision'}" onclick="event.stopPropagation(); openPanel('${t.blocked_by}')">⛔ ${t.blocked_by}</span>`
+    : '';
   return `
-    <div class="card ${t.attention ? 'attention' : ''} ${isSel ? 'selected' : ''}" onclick="openPanel('${t.key}')">
+    <div class="card ${t.attention ? 'attention' : ''} ${isSel ? 'selected' : ''} ${t.blocked_by ? 'blocked' : ''}" onclick="openPanel('${t.key}')">
       <div class="card-key ${adhocCls}">
         <span>${t.key}</span>
+        ${epic}
+        ${blocked}
         ${t.attention ? '<span class="attention-glyph">⚠</span>' : ''}
       </div>
       <div class="card-summary">${t.summary}</div>
@@ -1141,18 +1683,70 @@ function openPanel(key) {
   if (!t) return;
 
   selectedCard = key;
+  // Switching cards clears any expanded step (it belonged to the previous ticket).
+  if (!expandedStep || expandedStep.ticketKey !== key) {
+    expandedStep = null;
+    document.getElementById("sidePanel").classList.remove("wide");
+  }
   renderKanban();
 
   document.getElementById("panelKey").textContent = t.key;
   document.getElementById("panelSummary").textContent = t.summary;
-  document.getElementById("panelBody").innerHTML = renderPanel(t);
+  rebuildPanelBody(t);
   document.getElementById("sidePanel").classList.add("open");
 }
 
 function closePanel() {
   document.getElementById("sidePanel").classList.remove("open");
+  document.getElementById("sidePanel").classList.remove("wide");
   selectedCard = null;
+  expandedStep = null;
   renderKanban();
+}
+
+// Inner helper — re-renders only the panel body so we can toggle wide mode
+// without re-rendering the whole board.
+function rebuildPanelBody(t) {
+  const body = document.getElementById("panelBody");
+  const sections = renderPanel(t);
+  const isExpanded = expandedStep && expandedStep.ticketKey === t.key;
+  body.className = "panel-body" + (isExpanded ? " has-expand" : "");
+  body.innerHTML = sections + (isExpanded ? renderExpandPane(t, expandedStep.index) : "");
+}
+
+function toggleStep(ticketKey, index) {
+  const hand = HANDS[current];
+  const all = hand.tickets.concat(hand.adhoc || []);
+  const t = all.find(x => x.key === ticketKey);
+  if (!t) return;
+
+  const already = expandedStep && expandedStep.ticketKey === ticketKey && expandedStep.index === index;
+  if (already) {
+    expandedStep = null;
+    document.getElementById("sidePanel").classList.remove("wide");
+  } else {
+    expandedStep = {ticketKey, index};
+    document.getElementById("sidePanel").classList.add("wide");
+  }
+  rebuildPanelBody(t);
+}
+
+function renderExpandPane(t, index) {
+  const stepLabel = (t.done && t.done[index]) || "(step)";
+  const detailKey = `${t.key}::${index}`;
+  const detail = STEP_DETAILS[detailKey];
+  const bodyHtml = detail
+    ? detail
+    : `(no extra notes for this step yet — once the agent populates <code>record_state(details=...)</code> for non-trivial steps this is where the multi-paragraph narrative shows up: what was attempted, results, decisions, issues, conclusion)`;
+  return `
+    <div class="expand-pane">
+      <div class="ep-header">
+        <span>Step ${index + 1} · details</span>
+        <button class="ep-close" onclick="toggleStep('${t.key}', ${index})">collapse ▸</button>
+      </div>
+      <div class="ep-title">${stepLabel}</div>
+      <div class="ep-body">${bodyHtml}</div>
+    </div>`;
 }
 
 function renderPanel(t) {
@@ -1164,12 +1758,13 @@ function renderPanel(t) {
 
   let done = '';
   if (t.done && t.done.length > 0) {
+    const activeIdx = (expandedStep && expandedStep.ticketKey === t.key) ? expandedStep.index : -1;
     done = `
       <div class="section done">
         <div class="section-label"><span class="section-num">2</span> DONE</div>
         <div class="section-content">
           <ul class="done-list">
-            ${t.done.map((d, i) => `<li><span class="check">✓</span><span class="text ${i >= t.done.length - 2 ? 'recent' : ''}">${d}</span></li>`).join('')}
+            ${t.done.map((d, i) => `<li class="expandable ${i === activeIdx ? 'active' : ''}" onclick="toggleStep('${t.key}', ${i})"><span class="check">✓</span><span class="text ${i >= t.done.length - 2 ? 'recent' : ''}">${d}</span></li>`).join('')}
           </ul>
         </div>
       </div>`;
@@ -1292,8 +1887,10 @@ function renderWatching(t) {
 // ─── Boot ─────────────────────────────────────────────────────────
 function render() {
   renderTabs();
-  renderRoutines();
+  renderScopeBar();
   renderKanban();
+  renderActivityTrigger();
+  if (activityOpen) renderActivityPopout();
 }
 function tick() {
   const el = document.getElementById("clock");
@@ -1303,11 +1900,22 @@ render(); tick(); setInterval(tick, 30_000);
 
 // Click outside to close panel
 document.addEventListener('click', (e) => {
+  // Side panel
   const panel = document.getElementById('sidePanel');
-  if (!panel.classList.contains('open')) return;
-  if (panel.contains(e.target)) return;
-  if (e.target.closest('.card')) return;
-  closePanel();
+  if (panel.classList.contains('open')
+      && !panel.contains(e.target)
+      && !e.target.closest('.card')
+      && !e.target.closest('.scope-bar')
+      && !e.target.closest('.epic-chip')) {
+    closePanel();
+  }
+  // Activity popout
+  if (activityOpen
+      && !e.target.closest('#activityPopout')
+      && !e.target.closest('#activityTrigger')) {
+    activityOpen = false;
+    document.getElementById('activityPopout').classList.remove('open');
+  }
 });
 </script>
 </body>
