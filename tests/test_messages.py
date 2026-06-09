@@ -5,8 +5,11 @@ from pydantic import ValidationError
 from ranch.runner.messages import (
     CheckpointInput,
     DecisionLogInput,
+    DossierOption,
     HumanDecision,
     HumanNote,
+    PlanStep,
+    RecordStateInput,
 )
 
 
@@ -143,3 +146,79 @@ def test_human_note_empty_content_allowed():
     # Empty notes are allowed — agent sees an empty note is fine
     note = HumanNote(content="")
     assert note.content == ""
+
+
+# ─── RecordStateInput / dossier (Phase H1) ───────────────────────
+
+
+def _minimal_state(**overrides):
+    base = {
+        "plan": [{"step": "Read the ticket", "status": "done"}],
+        "just_did": "Finished reading the ticket and the linked epic.",
+        "state": "planning",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_record_state_minimal_valid():
+    payload = RecordStateInput.model_validate(_minimal_state())
+    assert payload.state == "planning"
+    assert payload.plan[0].status == "done"
+    assert payload.blocker is None
+    assert payload.options is None
+    assert payload.files_touched == []
+
+
+def test_record_state_full_parked_with_options():
+    data = _minimal_state(
+        state="parked",
+        blocker="Plan approval needed — see options.",
+        options=[
+            {"label": "approve", "description": "Proceed with the proposed plan."},
+            {"label": "split", "description": "Split into ECD-1234a and ECD-1234b."},
+        ],
+        files_touched=["foo.py", "bar.py"],
+        ticket="ECD-1234",
+    )
+    payload = RecordStateInput.model_validate(data)
+    assert payload.state == "parked"
+    assert payload.options is not None
+    assert len(payload.options) == 2
+    assert payload.options[0].label == "approve"
+    assert payload.ticket == "ECD-1234"
+
+
+def test_record_state_rejects_bad_state():
+    with pytest.raises(ValidationError):
+        RecordStateInput.model_validate(_minimal_state(state="not_a_real_state"))
+
+
+def test_record_state_rejects_bad_plan_status():
+    with pytest.raises(ValidationError):
+        RecordStateInput.model_validate(
+            _minimal_state(plan=[{"step": "Do thing", "status": "halfway"}])
+        )
+
+
+def test_record_state_rejects_empty_just_did():
+    with pytest.raises(ValidationError, match="just_did must not be empty"):
+        RecordStateInput.model_validate(_minimal_state(just_did="   "))
+
+
+def test_record_state_requires_required_fields():
+    with pytest.raises(ValidationError):
+        RecordStateInput.model_validate({"plan": [], "just_did": "x"})  # missing state
+
+
+def test_plan_step_notes_optional():
+    step = PlanStep(step="Wire MCP tool", status="in_progress")
+    assert step.notes is None
+    step2 = PlanStep(step="Wire MCP tool", status="in_progress", notes="schema first")
+    assert step2.notes == "schema first"
+
+
+def test_dossier_option_requires_both_fields():
+    DossierOption(label="approve", description="Go ahead.")
+    with pytest.raises(ValidationError):
+        DossierOption(label="approve")  # missing description

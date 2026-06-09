@@ -128,6 +128,7 @@ class Orchestrator:
             allowed_tools=[
                 "Read", "Write", "Edit", "Bash", "Grep", "Glob",
                 "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
+                "mcp__ranch__record_state",
             ],
             hooks={"PostToolUse": [make_checkpoint_hook(self)]},
             permission_mode="acceptEdits",
