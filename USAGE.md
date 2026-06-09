@@ -97,6 +97,34 @@ ranch runs --agent max      # filter by agent
 ranch resume 3              # resume run #3 by SDK session ID
 ```
 
+## Propose a plan (Phase H6)
+
+Run a bounded, file-system-read-only SDK session that produces a plan +
+acceptance criteria for a ticket and parks for approval. Consumes the
+scope bundle saved by `ranch scope --save`.
+
+```bash
+ranch scope ECD-1234 --save                          # produces ~/.ranch/scopes/ECD-1234.md
+ranch propose ECD-1234 --agent max                   # bounded plan session
+ranch propose ECD-1234 --cwd /path/to/worktree       # explicit worktree
+ranch propose ECD-1234 --agent max --budget 300      # extend the 180s default
+
+ranch dossier <run_id>                               # inspect the proposal afterwards
+```
+
+Hard guarantees:
+- The agent has no Write or Edit tools during propose — your worktree
+  cannot be modified, branches cannot be created.
+- Bash is allowed but only sensibly used for read-only commands; the
+  system prompt instructs the agent not to mutate state.
+- A wall-clock budget (default 180s) bounds cost; on overrun the
+  orchestrator requests a clean stop.
+
+The final dossier is `state=parked` with the full plan + acceptance
+criteria in `details` (Confluence-expand long-form content), and
+options=`approve|reject`. Approving flows the plan into a full
+`ranch run` (H6 → H8 wiring lands with H11 ranch hand).
+
 ## Scope a ticket (Phase H5)
 
 Build a pre-flight context bundle for a ticket — epic, sister tickets, open PRs, design links, Confluence refs. The ranch hand calls this before planning so the agent starts with the full picture instead of discovering it tool-call by tool-call.
