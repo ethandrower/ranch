@@ -1449,12 +1449,32 @@ def approve_cmd(run_id, note):
     _queue_interjection(run_id, "approve", note)
     console.print(f"[green]✓[/green] Approval queued for run #{run_id}")
 
+    # P5: timeline emit
+    from .events import emit_event
+    from .models import Run
+    with db_session() as s:
+        run = s.query(Run).filter_by(id=run_id).one_or_none()
+        hand = run.agent if run else None
+        ticket = run.ticket if run else None
+    if hand:
+        emit_event(
+            hand_name=hand, kind="approval", severity="good",
+            title=f"Approved run #{run_id}" + (f" ({ticket})" if ticket else ""),
+            detail=note or None, ticket=ticket,
+        )
+
     # P1: cascading unblock — any tickets blocked by THIS run's ticket get
     # auto-resolved on approval. Cheap and silent if nothing's blocked.
     from .blocks import resolve_blocks_on_approve
     n = resolve_blocks_on_approve(run_id)
     if n:
         console.print(f"  [dim]↳ unblocked {n} dependent ticket{'s' if n != 1 else ''}[/dim]")
+        if hand:
+            emit_event(
+                hand_name=hand, kind="block_resolved", severity="good",
+                title=f"Unblocked {n} dependent ticket{'s' if n != 1 else ''}",
+                detail=f"via approval of {ticket}" if ticket else None,
+            )
 
 
 @cli.command("reject")

@@ -285,6 +285,10 @@ def build_hand_view(hand_name: str) -> dict[str, Any]:
         active = any(r.state not in ("parked", "queued", "needs_approval") for r in runs)
         status = "running" if active else "idle"
 
+        # P5 — populate events_log from the hand_events table.
+        from ..events import list_events_for_hand
+        events_log = list_events_for_hand(hand_name, limit=20)
+
         return {
             "label": hand_name,
             "status": status,
@@ -293,8 +297,9 @@ def build_hand_view(hand_name: str) -> dict[str, Any]:
             "initiative_labels": labels,
             "tickets": tickets,
             "adhoc": adhoc,
-            # Events log + routines are populated in P5; emit empty shells so
-            # the UI doesn't have to special-case absent keys.
-            "events_log": [],
+            "events_log": events_log,
+            # Routines (jira_triage / pr_comments / etc cadence indicators)
+            # need a HandHeartbeat write-side — deferred. Emit empty so the
+            # UI keeps the activity-popout's status section happy.
             "routines": {},
         }

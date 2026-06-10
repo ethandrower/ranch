@@ -108,6 +108,13 @@ def create_app() -> FastAPI:
     def get_hand(name: str) -> dict:
         return build_hand_view(name)
 
+    @app.get("/api/hands/{name}/events")
+    def get_hand_events(name: str, limit: int = 50) -> list[dict]:
+        """Standalone events fetch — used by the activity popout when it
+        wants more history than the embedded events_log carries."""
+        from ..events import list_events_for_hand
+        return list_events_for_hand(name, limit=limit)
+
     # ─── Tickets ───────────────────────────────────────────────────
 
     @app.get("/api/tickets/{key}")

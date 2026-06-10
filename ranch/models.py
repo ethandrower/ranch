@@ -325,3 +325,27 @@ class Block(Base):
     resolved_by_checkpoint_id   = Column(Integer, ForeignKey("checkpoints.id"), nullable=True)
     # Source: "agent" (via record_block MCP tool) or "operator" (via `ranch block` CLI).
     source                      = Column(String, default="agent")
+
+
+class HandEvent(Base):
+    """A single timeline entry per hand — what changed and when.
+
+    Populated by the hand orchestrator on state transitions, CI flips,
+    review-comment fetches, triage decisions, deploys, and block
+    create/resolve. Consumed by the console's Activity popout +
+    per-hand events log.
+
+    Append-only — never updated, never deleted. Old rows can be pruned
+    by age, but we don't write that yet.
+    """
+    __tablename__ = "hand_events"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    hand_name   = Column(String, index=True)
+    ticket      = Column(String, nullable=True)
+    kind        = Column(String, index=True)   # e.g. "state_transition", "ci_flip", "review_comment", "block_created"
+    severity    = Column(String, default="info")  # good | bad | warn | info
+    icon        = Column(String, default="·")
+    title       = Column(String)
+    detail      = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=utcnow, index=True)
