@@ -115,6 +115,121 @@ def create_app() -> FastAPI:
         from ..events import list_events_for_hand
         return list_events_for_hand(name, limit=limit)
 
+    @app.get("/api/hands/{name}/candidates")
+    def get_hand_candidates(name: str, project: str | None = None) -> list[dict]:
+        """Triage candidates for this hand — Jira tickets routed via
+        `ranch-<name>` label that aren't yet in flight. Same query as
+        `ranch triage --agent <name>` but JSON-shaped for the UI's
+        discovery drawer."""
+        from ..jira_backend import resolve_jira_client
+        from ..triage import in_flight_ticket_keys_for_agent, triage
+
+        try:
+            client_ctx, hand_account = resolve_jira_client()
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Jira backend unavailable: {e}")
+
+        in_flight = in_flight_ticket_keys_for_agent(name)
+        try:
+            with client_ctx as client:
+                tickets = client.list_for_hand(
+                    name,
+                    assignee_account=hand_account or None,
+                    project=project,
+                )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Jira query failed: {e}")
+
+        ranked = triage(tickets, in_flight)
+        return [
+            {
+                "key": t.key,
+                "summary": t.summary,
+                "status": t.status,
+                "priority": t.priority,
+                "labels": t.labels,
+                "initiative": t.initiative,
+                "score": s.total,
+                "has_figma_link": t.has_figma_link,
+                "age_days": t.age_days,
+            }
+            for t, s in ranked
+        ]
+
+    class _PickupBody(BaseModel):
+        ticket: str
+        initiative: str | None = None
+        brief: str | None = None  # if absent, we use the Jira summary
+
+    @app.post("/api/hands/{name}/pickup")
+    def pickup_ticket(name: str, body: _PickupBody) -> dict:
+        """Queue a Jira ticket for this hand to pick up on its next tick.
+
+        Creates a Run row in state='queued'. Does NOT spawn an orchestrator
+        — the hand's normal pickup loop will start the propose flow on its
+        next poll cycle. Safe to call without a hand running; the row will
+        be waiting.
+        """
+        from ..config import reload_agents
+        from ..initiatives import resolve_initiative_for_run
+        from ..jira_backend import resolve_jira_client
+        from ..models import Run
+
+        agents = reload_agents()
+        if name not in agents:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Hand '{name}' not configured. Add it to config.toml.",
+            )
+
+        # Pull Jira labels so initiative resolution picks up the
+        # ranch-initiative:<key> grouping label if present.
+        labels: list[str] = []
+        summary_from_jira = ""
+        try:
+            client_ctx, _ = resolve_jira_client()
+            with client_ctx as client:
+                jt, _ = client.get_ticket(body.ticket)
+                labels = jt.labels
+                summary_from_jira = jt.summary
+        except Exception:
+            pass
+
+        resolved_initiative = resolve_initiative_for_run(
+            operator_override=body.initiative,
+            ticket_labels=labels,
+            hand_name=name,
+        )
+
+        brief_text = body.brief or summary_from_jira or f"Work on {body.ticket}."
+
+        with db_session() as s:
+            existing = s.query(Run).filter(
+                Run.agent == name,
+                Run.ticket == body.ticket,
+                Run.ended_at.is_(None),
+            ).first()
+            if existing:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{body.ticket} already has an active run (#{existing.id}).",
+                )
+
+            run = Run(
+                agent=name,
+                ticket=body.ticket,
+                state="queued",
+                cwd=str(agents[name].worktree),
+                initial_prompt=brief_text,
+                initiative_key=resolved_initiative,
+                dispatch_mode="background",
+            )
+            s.add(run); s.flush()
+            run_id = run.id
+
+        publish("ticket_picked_up", {"hand": name, "ticket": body.ticket, "run_id": run_id})
+        return {"ok": True, "run_id": run_id, "initiative": resolved_initiative}
+
     # ─── Tickets ───────────────────────────────────────────────────
 
     @app.get("/api/tickets/{key}/step-details")
