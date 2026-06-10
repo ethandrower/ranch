@@ -23,16 +23,26 @@ DEV_HOME="$WORKTREE_ROOT/.ranch-dev"
 
 mkdir -p "$DEV_HOME"
 
-# ─── Pre-flight: bail if 5174 or 8421 are already taken ─────────────
-for port in 5174 8421; do
-  if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "✗ Port $port is in use:"
-    lsof -nP -iTCP:$port -sTCP:LISTEN
-    echo
+# ─── Pre-flight ─────────────────────────────────────────────────────
+# 5174 (Vite) is ours — must be free.
+if lsof -nP -iTCP:5174 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "✗ Port 5174 (Vite renderer) is in use:"
+  lsof -nP -iTCP:5174 -sTCP:LISTEN
+  echo
+  echo "  Investigate before launching — do NOT kill blindly."
+  exit 1
+fi
+# 8421 (sidecar) — coexist with a healthy one, refuse if it's something else.
+if lsof -nP -iTCP:8421 -sTCP:LISTEN >/dev/null 2>&1; then
+  if curl -fs http://127.0.0.1:8421/api/health >/dev/null 2>&1; then
+    echo "  (note: a healthy ranch sidecar is already running on 8421 — coexisting)"
+  else
+    echo "✗ Port 8421 is held by an unidentified process:"
+    lsof -nP -iTCP:8421 -sTCP:LISTEN
     echo "  Investigate before launching — do NOT kill blindly."
     exit 1
   fi
-done
+fi
 
 # ─── Isolation env ─────────────────────────────────────────────────
 export RANCH_HOME="$DEV_HOME"

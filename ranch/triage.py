@@ -109,6 +109,12 @@ class JiraTicket:
     def age_days(self) -> float:
         return (datetime.now(timezone.utc) - self.created).total_seconds() / 86400
 
+    @property
+    def initiative(self) -> str | None:
+        """The `ranch-initiative:<key>` label value, or None if absent."""
+        from .initiatives import extract_initiative
+        return extract_initiative(self.labels)
+
 
 @dataclass
 class ViabilityScore:
@@ -313,11 +319,26 @@ class JiraClient:
     # _normalize_ticket has consistent input shape.
     _FIELDS = "summary,status,priority,created,updated,description,comment,labels,assignee,parent"
 
-    def list_assigned_to_me(self, *, project: str | None = None) -> list[JiraTicket]:
-        """Return all open tickets currently assigned to the authenticated user."""
+    def list_assigned_to_me(
+        self,
+        *,
+        project: str | None = None,
+        initiative_keys: list[str] | None = None,
+    ) -> list[JiraTicket]:
+        """Return all open tickets currently assigned to the authenticated user.
+
+        When `initiative_keys` is provided, the JQL filters to tickets
+        carrying any `ranch-initiative:<key>` label for the given keys.
+        Empty list = no scoping (return everything assigned).
+        """
+        from .initiatives import jql_label_clause
         jql_parts = ["assignee = currentUser()", "statusCategory != Done"]
         if project:
             jql_parts.append(f"project = {project}")
+        if initiative_keys:
+            clause = jql_label_clause(initiative_keys)
+            if clause:
+                jql_parts.append(clause)
         jql = " AND ".join(jql_parts) + " ORDER BY priority DESC, updated DESC"
         return self._search(jql)
 

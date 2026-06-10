@@ -1022,13 +1022,21 @@ def scope_cmd(ticket_key, save, as_json, cwd):
 
 
 @cli.command("triage")
-@click.option("--agent", default=None, help="Exclude tickets already in flight for this agent (default: anyone).")
+@click.option("--agent", default=None, help="Exclude tickets already in flight for this agent (default: anyone). When set, also scopes the JQL to the hand's initiatives unless --all-initiatives is passed.")
 @click.option("--project", default=None, help="Filter to a single Jira project key (e.g. ECD).")
 @click.option("--top", "top_n", default=10, type=int, help="Show only the top N candidates.")
 @click.option("--json", "as_json", is_flag=True, help="Emit raw JSON suitable for scripting (e.g. by the ranch hand scheduler).")
-def triage_cmd(agent, project, top_n, as_json):
-    """Rank assigned Jira tickets by viability (Phase H4)."""
+@click.option("--all-initiatives", is_flag=True, default=False, help="Disable initiative scoping even when --agent is set.")
+def triage_cmd(agent, project, top_n, as_json, all_initiatives):
+    """Rank assigned Jira tickets by viability (Phase H4).
+
+    When --agent is set, the JQL is scoped to tickets carrying any
+    `ranch-initiative:<key>` label matching the hand's HandInitiative rows.
+    Pass --all-initiatives to disable that scoping (useful when first
+    onboarding a hand or auditing).
+    """
     import json as _json
+    from .initiatives import initiatives_for_hand
     from .triage import (
         JiraClient,
         JiraConfig,
@@ -1045,9 +1053,18 @@ def triage_cmd(agent, project, top_n, as_json):
 
     in_flight = in_flight_ticket_keys_for_agent(agent)
 
+    # Initiative scoping — only when --agent is provided and the operator
+    # didn't ask for the unscoped view. If the hand has no HandInitiative
+    # rows at all, we fall back to unscoped so triage isn't silently empty.
+    initiative_keys: list[str] | None = None
+    if agent and not all_initiatives:
+        initiative_keys = initiatives_for_hand(agent) or None
+
     try:
         with JiraClient(cfg) as client:
-            tickets = client.list_assigned_to_me(project=project)
+            tickets = client.list_assigned_to_me(
+                project=project, initiative_keys=initiative_keys,
+            )
     except Exception as e:
         console.print(f"[red]Jira request failed:[/red] {e}")
         raise click.Abort()
@@ -1063,6 +1080,8 @@ def triage_cmd(agent, project, top_n, as_json):
                 "status": t.status,
                 "priority": t.priority,
                 "has_figma_link": t.has_figma_link,
+                "initiative": t.initiative,
+                "labels": t.labels,
                 "score": {
                     "total": s.total,
                     "status": s.status,
@@ -1079,13 +1098,17 @@ def triage_cmd(agent, project, top_n, as_json):
 
     if not top:
         console.print("[yellow]No viable tickets found.[/yellow]")
+        if initiative_keys:
+            console.print(f"[dim](Scoped to initiatives: {', '.join(initiative_keys)} — pass --all-initiatives to widen.)[/dim]")
         if in_flight:
             console.print(f"[dim]({len(in_flight)} ticket(s) excluded as already in flight: {', '.join(sorted(in_flight))})[/dim]")
         return
 
-    table = Table(title=f"Triage — top {len(top)} of {len(ranked)}", show_header=True)
+    scope_note = f" — scoped to: {', '.join(initiative_keys)}" if initiative_keys else ""
+    table = Table(title=f"Triage — top {len(top)} of {len(ranked)}{scope_note}", show_header=True)
     table.add_column("Rank", style="dim", width=4)
     table.add_column("Key", style="bold cyan")
+    table.add_column("Init", style="magenta", width=10)
     table.add_column("Status")
     table.add_column("Pri", width=8)
     table.add_column("Figma", justify="center", width=5)
@@ -1096,6 +1119,7 @@ def triage_cmd(agent, project, top_n, as_json):
         table.add_row(
             str(i),
             t.key,
+            t.initiative or "—",
             t.status,
             t.priority or "—",
             "✓" if t.has_figma_link else "—",
@@ -1307,7 +1331,8 @@ def run_cmd(agent, ticket, brief, free, auto_approve):
 @click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
 @click.option("--free", is_flag=True, default=False, help="Skip the plan→push workflow")
 @click.option("--auto-approve", is_flag=True, default=False, help="Auto-approve every checkpoint")
-def dispatch_cmd(agent, ticket, brief, free, auto_approve):
+@click.option("--initiative", default=None, help="Initiative key to stamp on the run (overrides Jira label + hand default).")
+def dispatch_cmd(agent, ticket, brief, free, auto_approve, initiative):
     """Start a run in the background and return immediately.
 
     Creates a Run row, spawns a detached orchestrator subprocess, writes the
@@ -1315,12 +1340,20 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
       ranch approve|reject|note|stop <run_id>
       ranch status <run_id>
       tail -f $(ranch log <run_id>)  (once Plan C lands)
+
+    Initiative resolution (Phase A — board-per-initiative):
+      1. --initiative flag wins if given
+      2. Otherwise, if --ticket points at a Jira issue with a
+         `ranch-initiative:<key>` label, that wins
+      3. Otherwise the hand's default initiative is used
+      4. Otherwise the run is ungrouped (initiative_key=NULL)
     """
     import subprocess
     import sys
     from pathlib import Path
     from .config import reload_agents, LOG_DIR
     from .db import db_session, init_db
+    from .initiatives import resolve_initiative_for_run
     from .models import Run
 
     init_db()
@@ -1331,6 +1364,26 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
 
     brief_text = Path(brief).read_text() if Path(brief).exists() else brief
     a = agents[agent]
+
+    # Resolve the initiative key for this run. If --ticket was given AND
+    # --initiative wasn't, try to fetch the ticket from Jira to read its
+    # label. Failures here are non-fatal — fall through to hand default.
+    ticket_labels: list[str] = []
+    if ticket and not initiative:
+        try:
+            from .triage import JiraClient, JiraConfig
+            cfg = JiraConfig.load()
+            with JiraClient(cfg) as jc:
+                jt, _ = jc.get_ticket(ticket)
+                ticket_labels = jt.labels or []
+        except Exception as e:
+            console.print(f"[dim]Could not fetch Jira labels for {ticket}: {e}[/dim]")
+
+    resolved_initiative = resolve_initiative_for_run(
+        operator_override=initiative,
+        ticket_labels=ticket_labels,
+        hand_name=agent,
+    )
 
     # Create the Run row first so we can give the caller a run_id and hand
     # the ID to the detached child. State stays "queued" until the child
@@ -1345,6 +1398,7 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
             free=int(free),
             auto_approve=int(auto_approve),
             dispatch_mode="background",
+            initiative_key=resolved_initiative,
         )
         db.add(run)
         db.flush()
@@ -1371,6 +1425,8 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
         )
 
     console.print(f"[green]✓[/green] Dispatched run [bold]#{run_id}[/bold] ({agent} / {ticket or 'ad-hoc'})")
+    if resolved_initiative:
+        console.print(f"  Initiative:    [magenta]{resolved_initiative}[/magenta]")
     console.print(f"  PID:  {proc.pid}")
     console.print(f"  Log:  {log_path}")
     console.print(f"  Approve with: [cyan]ranch approve {run_id}[/cyan]")
