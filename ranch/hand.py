@@ -198,7 +198,16 @@ def _find_approved_parked_propose(agent: str) -> _ApprovedPropose | None:
     `parked` AND has an unprocessed `approve` interjection. Consumes (marks
     processed) the interjection in the same transaction so the same approval
     can't fire execute twice.
+
+    Phase B — skips runs with unresolved blocks. If a propose Run is
+    blocked by another ticket's pending decision, operator approval on
+    the propose itself does NOT fire execute; the block must clear first
+    (via the blocker's own approval cascade, or `ranch unblock <run_id>`).
+    This prevents "operator approved a plan that depends on a decision
+    that hasn't been made yet."
     """
+    from .blocks import _is_run_blocked_in_session
+
     cutoff = datetime.now(timezone.utc) - AWAITING_APPROVAL_WINDOW
     with db_session() as db:
         runs = (
@@ -225,6 +234,15 @@ def _find_approved_parked_propose(agent: str) -> _ApprovedPropose | None:
                 .first()
             )
             if not approve_row:
+                continue
+            # Phase B: refuse to fire execute on a blocked propose. Leave
+            # the approve interjection unprocessed so it fires the moment
+            # the block resolves.
+            if _is_run_blocked_in_session(db, run.id):
+                console.print(
+                    f"[yellow]{agent}: run #{run.id} ({run.ticket}) was approved "
+                    f"but has an unresolved block — deferring execute until blocker resolves.[/yellow]"
+                )
                 continue
             approve_row.processed_at = datetime.now(timezone.utc)
             try:
@@ -372,7 +390,13 @@ class RanchHand:
     # ─── Default backends ────────────────────────────────────────
 
     def _default_triage(self, project: str | None) -> list[str]:
-        """Live triage via Jira. Returns ticket keys in ranked order."""
+        """Live triage via Jira — Phase A v2 routing.
+
+        Pulls tickets via `list_for_hand(self.name)`, which builds the
+        `assignee = <ranch_hand_account> AND labels = "ranch-<hand>"`
+        query so only tickets explicitly routed to THIS hand are picked
+        up. Operator controls fan-out by adding labels in Jira.
+        """
         from .triage import (
             JiraClient,
             JiraConfig,
@@ -387,7 +411,11 @@ class RanchHand:
             return []
         in_flight = in_flight_ticket_keys_for_agent(self.name)
         with JiraClient(cfg) as client:
-            tickets = client.list_assigned_to_me(project=project)
+            tickets = client.list_for_hand(
+                self.name,
+                assignee_account=cfg.hand_account,
+                project=project,
+            )
         ranked = triage(tickets, in_flight)
         return [t.key for t, _ in ranked]
 
