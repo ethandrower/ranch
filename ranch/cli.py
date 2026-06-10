@@ -1,4 +1,6 @@
 """Click CLI for ranch."""
+from typing import Optional
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -1554,6 +1556,36 @@ def unblock_cmd(run_id: int) -> None:
         console.print(f"[dim]Run #{run_id} had no open blocks[/dim]")
     else:
         console.print(f"[green]✓[/green] Cleared {n} block{'s' if n != 1 else ''} on run #{run_id}")
+
+
+@cli.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Bind address. Localhost-only by default — do not expose externally.")
+@click.option("--port", default=None, type=int,
+              help="Bind port. Defaults to RANCH_API_PORT env or 8421.")
+@click.option("--reload", is_flag=True, help="Auto-reload on code changes (dev only).")
+def serve_cmd(host: str, port: Optional[int], reload: bool) -> None:
+    """Run the HTTP sidecar for the rebuilt console UI.
+
+    Endpoints under /api/*. SSE stream at /api/stream. Spawned by the
+    Electron main process; can also be run standalone for `curl`
+    debugging or external tooling.
+    """
+    import os
+    import uvicorn
+
+    effective_port = port or int(os.environ.get("RANCH_API_PORT", "8421"))
+    console.print(
+        f"[bold cyan]ranch sidecar[/bold cyan] starting on "
+        f"[yellow]http://{host}:{effective_port}[/yellow]"
+    )
+    uvicorn.run(
+        "ranch.api.app:app",
+        host=host,
+        port=effective_port,
+        log_level="info",
+        reload=reload,
+    )
 
 
 @cli.command("view-hand")
