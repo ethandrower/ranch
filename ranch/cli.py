@@ -1514,5 +1514,46 @@ def runs_cmd(limit, agent):
     console.print(table)
 
 
+@cli.command("view-hand")
+@click.argument("hand_name")
+@click.option("--json", "as_json", is_flag=True, help="Emit raw JSON instead of a rich summary.")
+def view_hand_cmd(hand_name: str, as_json: bool) -> None:
+    """Project a hand's current state into the new console's view-model shape.
+
+    Pure read — does not touch any agent runtime or hold locks. Used both
+    as a debug tool and as the data source the HTTP sidecar will serve
+    in P2 (the JSON shape is the API contract).
+    """
+    import json as _json
+    from .view.hands import build_hand_view
+
+    view = build_hand_view(hand_name)
+
+    if as_json:
+        click.echo(_json.dumps(view, indent=2, default=str))
+        return
+
+    console.print(f"[bold cyan]{view['label']}[/bold cyan]  [dim]{view['status']}[/dim]")
+    console.print(
+        f"initiatives: [yellow]{', '.join(view['initiatives']) or '(none)'}[/yellow]"
+        f"  default=[yellow]{view['default_initiative'] or '(none)'}[/yellow]"
+    )
+    console.print(f"tickets: {len(view['tickets'])}  adhoc: {len(view['adhoc'])}")
+    if view["tickets"]:
+        t = Table(show_header=True, header_style="bold cyan")
+        t.add_column("Key"); t.add_column("Init"); t.add_column("Stage")
+        t.add_column("Attn"); t.add_column("Blocked by"); t.add_column("Summary")
+        for tk in view["tickets"]:
+            t.add_row(
+                tk["key"],
+                tk.get("initiative") or "—",
+                tk["stage"],
+                "⚠" if tk.get("attention") else "",
+                tk.get("blocked_by") or "",
+                (tk.get("summary") or "")[:60],
+            )
+        console.print(t)
+
+
 if __name__ == "__main__":
     cli()

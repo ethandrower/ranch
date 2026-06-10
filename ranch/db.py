@@ -49,6 +49,9 @@ def _migrate():
         ("runs", "last_pr_check_at", "DATETIME"),
         ("runs", "deploy_url", "VARCHAR"),
         ("runs", "deployed_at", "DATETIME"),
+        # Console rebuild P0 — denormalized FK to initiatives.key for the
+        # board-per-initiative filter. Backfilled from Jira label at triage.
+        ("runs", "initiative_key", "VARCHAR"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())
