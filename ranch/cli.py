@@ -1044,28 +1044,23 @@ def triage_cmd(agent, project, top_n, as_json, show_all):
     """
     import json as _json
     from .initiatives import route_label_for_hand
-    from .triage import (
-        JiraClient,
-        JiraConfig,
-        JiraConfigError,
-        in_flight_ticket_keys_for_agent,
-        triage,
-    )
+    from .jira_backend import resolve_jira_client
+    from .triage import in_flight_ticket_keys_for_agent, triage
 
     try:
-        cfg = JiraConfig.load()
-    except JiraConfigError as e:
+        client_ctx, hand_account = resolve_jira_client()
+    except Exception as e:
         console.print(f"[red]{e}[/red]")
         raise click.Abort()
 
     in_flight = in_flight_ticket_keys_for_agent(agent)
 
     try:
-        with JiraClient(cfg) as client:
+        with client_ctx as client:
             if agent and not show_all:
                 tickets = client.list_for_hand(
                     agent,
-                    assignee_account=cfg.hand_account,
+                    assignee_account=hand_account,
                     project=project,
                 )
             else:
@@ -1073,6 +1068,10 @@ def triage_cmd(agent, project, top_n, as_json, show_all):
     except Exception as e:
         console.print(f"[red]Jira request failed:[/red] {e}")
         raise click.Abort()
+
+    # Note: when reporting empty results below, we still use cfg-style
+    # `hand_account` so the help message can include it.
+    cfg = type("cfg", (), {"hand_account": hand_account})()
 
     ranked = triage(tickets, in_flight)
     top = ranked[:top_n]

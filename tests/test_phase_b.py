@@ -154,13 +154,13 @@ def test_multiple_blocked_runs_only_unblocked_one_fires():
 
 def test_default_triage_routes_via_list_for_hand(monkeypatch):
     """Verify hand.py's triage calls list_for_hand (the routing path),
-    not the legacy list_assigned_to_me."""
-    from ranch.triage import JiraConfig, JiraClient, JiraTicket
+    not the legacy list_assigned_to_me. The backend (trinity vs legacy)
+    is resolved transparently — this test plugs in via the resolver."""
+    from ranch.triage import JiraTicket
 
     captured: dict[str, tuple] = {}
 
     class FakeClient:
-        def __init__(self, *a, **kw): pass
         def __enter__(self): return self
         def __exit__(self, *a): pass
         def list_for_hand(self, hand_name, *, assignee_account=None, project=None):
@@ -178,13 +178,10 @@ def test_default_triage_routes_via_list_for_hand(monkeypatch):
             captured["call"] = ("legacy_list_assigned_to_me",)
             return []
 
-    fake_cfg = JiraConfig(url="https://x", email="ethan@citemed.io",
-                          api_token="t", hand_account="ethan@citemed.io")
-
-    # _default_triage does a local `from .triage import ...` so we have to
-    # patch the actual source module, not ranch.hand.
-    monkeypatch.setattr("ranch.triage.JiraClient", lambda c: FakeClient())
-    monkeypatch.setattr("ranch.triage.JiraConfig.load", classmethod(lambda cls: fake_cfg))
+    monkeypatch.setattr(
+        "ranch.jira_backend.resolve_jira_client",
+        lambda: (FakeClient(), "ethan@citemed.io"),
+    )
 
     from pathlib import Path
     hand = RanchHand(name="max", cwd=Path("/tmp"))

@@ -390,30 +390,27 @@ class RanchHand:
     # ─── Default backends ────────────────────────────────────────
 
     def _default_triage(self, project: str | None) -> list[str]:
-        """Live triage via Jira — Phase A v2 routing.
+        """Live triage via the resolved Jira backend (trinity by default).
 
         Pulls tickets via `list_for_hand(self.name)`, which builds the
         `assignee = <ranch_hand_account> AND labels = "ranch-<hand>"`
         query so only tickets explicitly routed to THIS hand are picked
         up. Operator controls fan-out by adding labels in Jira.
         """
-        from .triage import (
-            JiraClient,
-            JiraConfig,
-            JiraConfigError,
-            in_flight_ticket_keys_for_agent,
-            triage,
-        )
+        from .jira_backend import resolve_jira_client
+        from .triage import in_flight_ticket_keys_for_agent, triage
+
         try:
-            cfg = JiraConfig.load()
-        except JiraConfigError as e:
-            console.print(f"[yellow]{self.name}: Jira not configured — {e}[/yellow]")
+            client_ctx, hand_account = resolve_jira_client()
+        except Exception as e:
+            console.print(f"[yellow]{self.name}: Jira backend unavailable — {e}[/yellow]")
             return []
+
         in_flight = in_flight_ticket_keys_for_agent(self.name)
-        with JiraClient(cfg) as client:
+        with client_ctx as client:
             tickets = client.list_for_hand(
                 self.name,
-                assignee_account=cfg.hand_account,
+                assignee_account=hand_account or None,
                 project=project,
             )
         ranked = triage(tickets, in_flight)
