@@ -117,6 +117,13 @@ def create_app() -> FastAPI:
 
     # ─── Tickets ───────────────────────────────────────────────────
 
+    @app.get("/api/tickets/{key}/step-details")
+    def get_step_details(key: str) -> dict[str, str]:
+        """P6 — per-DONE-step expand-pane content. Walks the ticket's
+        dossier history and returns {step_label: details_text}."""
+        from ..view.step_details import step_details_for_ticket
+        return step_details_for_ticket(key)
+
     @app.get("/api/tickets/{key}")
     def get_ticket(key: str) -> dict:
         """Single-ticket detail bundle. Finds the active Run for this ticket

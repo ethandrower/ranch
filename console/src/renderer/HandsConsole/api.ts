@@ -44,6 +44,10 @@ export async function fetchTicket(key: string): Promise<Ticket & { run_id?: numb
   return jsonFetch<Ticket & { run_id?: number }>(`/api/tickets/${encodeURIComponent(key)}`);
 }
 
+export async function fetchStepDetails(ticketKey: string): Promise<Record<string, string>> {
+  return jsonFetch<Record<string, string>>(`/api/tickets/${encodeURIComponent(ticketKey)}/step-details`);
+}
+
 export async function approveRun(runId: number, note = ''): Promise<{ unblocked?: number }> {
   return jsonFetch<{ unblocked?: number }>(`/api/runs/${runId}/approve`, {
     method: 'POST',

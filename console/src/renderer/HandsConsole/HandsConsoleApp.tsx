@@ -3,7 +3,7 @@ import s from './styles.module.css';
 import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
 import {
   approveRun, rejectRun, stopRun,
-  fetchHand, fetchHandSummaries,
+  fetchHand, fetchHandSummaries, fetchStepDetails,
   subscribeToStream,
 } from './api';
 import type { HandSummary, HandView, Stage, Ticket } from './types';
@@ -678,7 +678,24 @@ function ExpandPane({
   ticket: Ticket; index: number; onClose: () => void;
 }) {
   const stepLabel = ticket.done[index] ?? '(step)';
-  const detail = `(no extra notes for this step yet — once record_state(details=...) is wired in the live pipeline, the multi-paragraph narrative for this step renders here)`;
+  const [details, setDetails] = useState<Record<string, string> | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchStepDetails(ticket.key)
+      .then((d) => { if (!cancelled) setDetails(d); })
+      .catch(() => { if (!cancelled) setDetails({}); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [ticket.key]);
+
+  const fallback = `(no extra notes for this step — the agent's record_state at the moment this step transitioned to done didn't include a details narrative; prompt the agent to populate \`details\` on non-trivial steps to fill this pane.)`;
+  const text = loading
+    ? '(loading…)'
+    : (details?.[stepLabel] && details[stepLabel].trim()) || fallback;
+
   return (
     <div className={s.expandPane}>
       <div className={s.epHeader}>
@@ -686,7 +703,7 @@ function ExpandPane({
         <button className={s.epClose} onClick={onClose}>collapse ▸</button>
       </div>
       <div className={s.epTitle}>{stepLabel}</div>
-      <div className={s.epBody}>{detail}</div>
+      <div className={s.epBody}>{text}</div>
     </div>
   );
 }
