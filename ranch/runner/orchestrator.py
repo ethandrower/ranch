@@ -13,6 +13,7 @@ from rich.rule import Rule
 
 from ranch.db import db_session
 from ranch.models import Run, Checkpoint, Dossier, Interjection
+from ranch.runner.blocks import make_block_hook
 from ranch.runner.checkpoints import make_checkpoint_hook, APPROVAL_REQUIRED
 from ranch.runner.dossier import make_dossier_hook
 from ranch.runner.judge_hook import make_judge_hook
@@ -45,6 +46,7 @@ DEFAULT_ALLOWED_TOOLS = [
     "Read", "Write", "Edit", "Bash", "Grep", "Glob",
     "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
     "mcp__ranch__record_state", "mcp__ranch__run_acceptance",
+    "mcp__ranch__record_block",
 ]
 
 
@@ -186,7 +188,12 @@ class Orchestrator:
             append_system_prompt=effective_append,
             mcp_servers={"ranch": ranch_mcp},
             allowed_tools=effective_tools,
-            hooks={"PostToolUse": [make_checkpoint_hook(self), make_dossier_hook(self), make_judge_hook(self)]},
+            hooks={"PostToolUse": [
+                make_checkpoint_hook(self),
+                make_dossier_hook(self),
+                make_judge_hook(self),
+                make_block_hook(self),
+            ]},
             permission_mode="acceptEdits",
         )
 
@@ -475,8 +482,12 @@ async def resume_run(run_id: int) -> None:
         allowed_tools=[
             "Read", "Write", "Edit", "Bash", "Grep", "Glob",
             "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
+            "mcp__ranch__record_block",
         ],
-        hooks={"PostToolUse": [make_checkpoint_hook(orch), make_dossier_hook(orch), make_judge_hook(orch)]},
+        hooks={"PostToolUse": [
+            make_checkpoint_hook(orch), make_dossier_hook(orch),
+            make_judge_hook(orch), make_block_hook(orch),
+        ]},
         permission_mode="acceptEdits",
         resume=sdk_session_id,
     )

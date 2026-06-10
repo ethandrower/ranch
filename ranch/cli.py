@@ -1447,6 +1447,13 @@ def approve_cmd(run_id, note):
     _queue_interjection(run_id, "approve", note)
     console.print(f"[green]✓[/green] Approval queued for run #{run_id}")
 
+    # P1: cascading unblock — any tickets blocked by THIS run's ticket get
+    # auto-resolved on approval. Cheap and silent if nothing's blocked.
+    from .blocks import resolve_blocks_on_approve
+    n = resolve_blocks_on_approve(run_id)
+    if n:
+        console.print(f"  [dim]↳ unblocked {n} dependent ticket{'s' if n != 1 else ''}[/dim]")
+
 
 @cli.command("reject")
 @click.argument("run_id", type=int)
@@ -1512,6 +1519,41 @@ def runs_cmd(limit, agent):
             r.exit_reason or "—",
         )
     console.print(table)
+
+
+@cli.command("block")
+@click.argument("run_id", type=int)
+@click.option("--blocker", "blocker_ticket", required=True, help="Ticket id of the blocker (e.g. ECD-2073)")
+@click.option("--reason", required=True, help="One-sentence reason for the block")
+def block_cmd(run_id: int, blocker_ticket: str, reason: str) -> None:
+    """Mark a run as blocked by another ticket's decision (operator override).
+
+    Hands will skip the run until the blocker resolves or until you call
+    `ranch unblock <run_id>`.
+    """
+    from .blocks import record_block as _record_block
+    block = _record_block(
+        blocked_run_id=run_id,
+        blocker_ticket=blocker_ticket,
+        reason=reason,
+        source="operator",
+    )
+    console.print(
+        f"[yellow]⛔[/yellow] Run #{run_id} blocked by [cyan]{blocker_ticket}[/cyan] "
+        f"(block #{block.id})"
+    )
+
+
+@cli.command("unblock")
+@click.argument("run_id", type=int)
+def unblock_cmd(run_id: int) -> None:
+    """Clear all unresolved blocks against a run (operator override)."""
+    from .blocks import resolve_blocks_for_run
+    n = resolve_blocks_for_run(run_id)
+    if n == 0:
+        console.print(f"[dim]Run #{run_id} had no open blocks[/dim]")
+    else:
+        console.print(f"[green]✓[/green] Cleared {n} block{'s' if n != 1 else ''} on run #{run_id}")
 
 
 @cli.command("view-hand")

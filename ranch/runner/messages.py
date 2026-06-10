@@ -35,6 +35,34 @@ class DecisionLogInput(BaseModel):
     rationale: str
 
 
+class RecordBlockInput(BaseModel):
+    """Payload the agent sends when calling mcp__ranch__record_block.
+
+    Use during propose/triage when the current ticket's plan depends on a
+    decision pending in another ticket. The hand scheduler skips runs that
+    have unresolved blocks pointing at them; the block auto-resolves when
+    the blocker ticket gets a checkpoint approval. Operator may override
+    via `ranch unblock <run_id>`.
+    """
+
+    blocker_ticket: str
+    reason: str
+
+    @field_validator("blocker_ticket")
+    @classmethod
+    def blocker_ticket_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("blocker_ticket must not be empty")
+        return v
+
+    @field_validator("reason")
+    @classmethod
+    def reason_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("reason must not be empty")
+        return v
+
+
 # ─── Dossier: structured agent self-report (Phase H1) ────────────────────────
 
 
