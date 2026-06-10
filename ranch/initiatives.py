@@ -17,6 +17,20 @@ from .models import HandInitiative, Initiative
 
 
 LABEL_PREFIX = "ranch-initiative:"
+ROUTING_LABEL_PREFIX = "ranch-"
+
+
+def route_label_for_hand(hand_name: str) -> str:
+    """The Jira label that routes a ticket to a specific hand.
+
+    Example: route_label_for_hand("max") -> "ranch-max".
+
+    Operator workflow: create a ticket, assign it to the ranch-hand user
+    account, add the `ranch-<hand>` label. The hand's triage loop picks
+    it up; no other hand will. Multiple labels can be added to fan a
+    ticket out to multiple hands, though that's an unusual case.
+    """
+    return f"{ROUTING_LABEL_PREFIX}{hand_name.strip().lower()}"
 
 
 def extract_initiative(labels: Iterable[str]) -> Optional[str]:

@@ -228,15 +228,25 @@ def test_jira_ticket_initiative_none_when_no_label():
     assert t.initiative is None
 
 
-# ─── JiraClient.list_assigned_to_me JQL building ───────────────────
+# ─── route_label_for_hand ─────────────────────────────────────────
 
 
-def test_jira_client_jql_includes_initiative_label_clause():
-    """We test the actual JQL string built when initiative_keys is passed
-    by intercepting the _search call."""
+def test_route_label_for_hand():
+    from ranch.initiatives import route_label_for_hand
+    assert route_label_for_hand("max") == "ranch-max"
+    assert route_label_for_hand("jeffy") == "ranch-jeffy"
+
+
+def test_route_label_for_hand_normalizes_case_and_whitespace():
+    from ranch.initiatives import route_label_for_hand
+    assert route_label_for_hand("  MAX  ") == "ranch-max"
+
+
+# ─── JiraClient.list_for_hand JQL building ─────────────────────────
+
+
+def _make_fake_jc(captured: dict):
     from ranch.triage import JiraClient, JiraConfig
-
-    captured: dict[str, str] = {}
 
     class FakeJC(JiraClient):
         def __init__(self):
@@ -245,28 +255,31 @@ def test_jira_client_jql_includes_initiative_label_clause():
         def _search(self, jql: str) -> list:
             captured["jql"] = jql
             return []
-
-    fake = FakeJC()
-    fake.list_assigned_to_me(initiative_keys=["ref-mgmt", "misc"])
-    assert "labels in" in captured["jql"]
-    assert "ranch-initiative:ref-mgmt" in captured["jql"]
-    assert "ranch-initiative:misc" in captured["jql"]
+    return FakeJC()
 
 
-def test_jira_client_no_initiative_clause_when_empty():
-    from ranch.triage import JiraClient, JiraConfig
-
+def test_list_for_hand_builds_routing_jql():
     captured: dict[str, str] = {}
+    _make_fake_jc(captured).list_for_hand("max", assignee_account="ethan@citemed.io")
+    jql = captured["jql"]
+    assert 'assignee = "ethan@citemed.io"' in jql
+    assert 'labels = "ranch-max"' in jql
+    assert "statusCategory != Done" in jql
 
-    class FakeJC(JiraClient):
-        def __init__(self):
-            self._cfg = JiraConfig(url="https://x", email="e", api_token="t")
-        def _search(self, jql: str) -> list:
-            captured["jql"] = jql
-            return []
 
-    FakeJC().list_assigned_to_me(initiative_keys=None)
-    assert "labels in" not in captured["jql"]
+def test_list_for_hand_falls_back_to_current_user_when_no_account():
+    captured: dict[str, str] = {}
+    _make_fake_jc(captured).list_for_hand("max")
+    assert "assignee = currentUser()" in captured["jql"]
+    assert 'labels = "ranch-max"' in captured["jql"]
+
+
+def test_list_assigned_to_me_no_label_filter():
+    """The unscoped query (operator-eyeball view) doesn't add the routing
+    label — that's the entire point of --all."""
+    captured: dict[str, str] = {}
+    _make_fake_jc(captured).list_assigned_to_me()
+    assert "ranch-" not in captured["jql"]
     assert "assignee = currentUser()" in captured["jql"]
 
 

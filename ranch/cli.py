@@ -1022,21 +1022,28 @@ def scope_cmd(ticket_key, save, as_json, cwd):
 
 
 @cli.command("triage")
-@click.option("--agent", default=None, help="Exclude tickets already in flight for this agent (default: anyone). When set, also scopes the JQL to the hand's initiatives unless --all-initiatives is passed.")
+@click.option("--agent", default=None, help="Route to a specific hand. When set, only tickets labelled `ranch-<agent>` AND assigned to the ranch-hand user are returned.")
 @click.option("--project", default=None, help="Filter to a single Jira project key (e.g. ECD).")
 @click.option("--top", "top_n", default=10, type=int, help="Show only the top N candidates.")
 @click.option("--json", "as_json", is_flag=True, help="Emit raw JSON suitable for scripting (e.g. by the ranch hand scheduler).")
-@click.option("--all-initiatives", is_flag=True, default=False, help="Disable initiative scoping even when --agent is set.")
-def triage_cmd(agent, project, top_n, as_json, all_initiatives):
-    """Rank assigned Jira tickets by viability (Phase H4).
+@click.option("--all", "show_all", is_flag=True, default=False, help="Show every assigned ticket regardless of routing label. Operator-eyeball view; not what the hand scheduler uses.")
+def triage_cmd(agent, project, top_n, as_json, show_all):
+    """Rank candidate Jira tickets for a hand (Phase A v2 routing).
 
-    When --agent is set, the JQL is scoped to tickets carrying any
-    `ranch-initiative:<key>` label matching the hand's HandInitiative rows.
-    Pass --all-initiatives to disable that scoping (useful when first
-    onboarding a hand or auditing).
+    Per-hand routing query (default when --agent is set):
+
+        assignee = <ranch_hand_account> AND statusCategory != Done
+        AND labels = "ranch-<agent>"
+
+    The `ranch_hand_account` defaults to your own Jira account; override
+    via [jira].hand_account in ~/.ranch/config.toml or the RANCH_HAND_ACCOUNT
+    env var.
+
+    Without --agent (or with --all), shows everything assigned to you —
+    use this to eyeball the inbox before assigning routing labels.
     """
     import json as _json
-    from .initiatives import initiatives_for_hand
+    from .initiatives import route_label_for_hand
     from .triage import (
         JiraClient,
         JiraConfig,
@@ -1053,18 +1060,16 @@ def triage_cmd(agent, project, top_n, as_json, all_initiatives):
 
     in_flight = in_flight_ticket_keys_for_agent(agent)
 
-    # Initiative scoping — only when --agent is provided and the operator
-    # didn't ask for the unscoped view. If the hand has no HandInitiative
-    # rows at all, we fall back to unscoped so triage isn't silently empty.
-    initiative_keys: list[str] | None = None
-    if agent and not all_initiatives:
-        initiative_keys = initiatives_for_hand(agent) or None
-
     try:
         with JiraClient(cfg) as client:
-            tickets = client.list_assigned_to_me(
-                project=project, initiative_keys=initiative_keys,
-            )
+            if agent and not show_all:
+                tickets = client.list_for_hand(
+                    agent,
+                    assignee_account=cfg.hand_account,
+                    project=project,
+                )
+            else:
+                tickets = client.list_assigned_to_me(project=project)
     except Exception as e:
         console.print(f"[red]Jira request failed:[/red] {e}")
         raise click.Abort()
@@ -1098,13 +1103,17 @@ def triage_cmd(agent, project, top_n, as_json, all_initiatives):
 
     if not top:
         console.print("[yellow]No viable tickets found.[/yellow]")
-        if initiative_keys:
-            console.print(f"[dim](Scoped to initiatives: {', '.join(initiative_keys)} — pass --all-initiatives to widen.)[/dim]")
+        if agent and not show_all:
+            from .initiatives import route_label_for_hand
+            console.print(f"[dim](Routing query: assignee={cfg.hand_account or 'currentUser()'} AND labels=\"{route_label_for_hand(agent)}\" — pass --all to widen.)[/dim]")
         if in_flight:
             console.print(f"[dim]({len(in_flight)} ticket(s) excluded as already in flight: {', '.join(sorted(in_flight))})[/dim]")
         return
 
-    scope_note = f" — scoped to: {', '.join(initiative_keys)}" if initiative_keys else ""
+    scope_note = ""
+    if agent and not show_all:
+        from .initiatives import route_label_for_hand
+        scope_note = f' — routed to {agent} via labels="{route_label_for_hand(agent)}"'
     table = Table(title=f"Triage — top {len(top)} of {len(ranked)}{scope_note}", show_header=True)
     table.add_column("Rank", style="dim", width=4)
     table.add_column("Key", style="bold cyan")
