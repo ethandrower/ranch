@@ -1,6 +1,11 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import s from './styles.module.css';
 import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
+import {
+  approveRun, rejectRun, stopRun,
+  fetchHand, fetchHandSummaries,
+  subscribeToStream,
+} from './api';
 import type { HandSummary, HandView, Stage, Ticket } from './types';
 
 const STAGES: Array<{ key: Stage; label: string; terminal?: boolean }> = [
@@ -17,15 +22,19 @@ const STAGES: Array<{ key: Stage; label: string; terminal?: boolean }> = [
 ];
 
 interface Props {
-  /** Live mode uses HTTP fetch; fixture mode (P3 default) uses bundled data. */
-  fetchHand?: (name: string) => Promise<HandView>;
-  fetchHandSummaries?: () => Promise<HandSummary[]>;
+  /** False or unset → live mode (fetch from sidecar). True → bundled fixture. */
+  useFixture?: boolean;
 }
 
-export function HandsConsoleApp({ fetchHand, fetchHandSummaries }: Props = {}) {
-  const [summaries, setSummaries] = useState<HandSummary[]>(FIXTURE_HAND_SUMMARIES);
-  const [hands, setHands] = useState<Record<string, HandView>>(FIXTURE_HANDS);
-  const [current, setCurrent] = useState<string>(FIXTURE_HAND_SUMMARIES[0]?.name ?? 'max');
+export function HandsConsoleApp({ useFixture = false }: Props = {}) {
+  const initialSummaries = useFixture ? FIXTURE_HAND_SUMMARIES : [];
+  const initialHands = useFixture ? FIXTURE_HANDS : {};
+  const [summaries, setSummaries] = useState<HandSummary[]>(initialSummaries);
+  const [hands, setHands] = useState<Record<string, HandView>>(initialHands);
+  const [current, setCurrent] = useState<string>(initialSummaries[0]?.name ?? 'max');
+  const [liveStatus, setLiveStatus] = useState<'connecting' | 'live' | 'fixture' | 'offline'>(
+    useFixture ? 'fixture' : 'connecting'
+  );
   const [currentInitiative, setCurrentInitiative] = useState<Record<string, string>>({});
   const [drilledEpic, setDrilledEpic] = useState<Record<string, string | null>>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -33,16 +42,65 @@ export function HandsConsoleApp({ fetchHand, fetchHandSummaries }: Props = {}) {
   const [activityOpen, setActivityOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // Live-mode bootstrap. In P3 the fetchers are undefined → fixture wins.
-  useEffect(() => {
-    if (!fetchHandSummaries) return;
-    fetchHandSummaries().then(setSummaries).catch(() => {});
-  }, [fetchHandSummaries]);
+  // ─── Live data wiring (P4) ────────────────────────────────────
+  // Fetch hand summaries on mount, then fetch the current hand's full
+  // view-model whenever the active tab changes. On fetch failure we fall
+  // back to the bundled fixture so the UI is never blank.
+
+  const refreshCurrentHand = useCallback(async () => {
+    if (useFixture) return;
+    if (!current) return;
+    try {
+      const view = await fetchHand(current);
+      setHands((h) => ({ ...h, [current]: view }));
+      setLiveStatus('live');
+    } catch {
+      setLiveStatus('offline');
+    }
+  }, [current, useFixture]);
 
   useEffect(() => {
-    if (!fetchHand || !current) return;
-    fetchHand(current).then((v) => setHands((h) => ({ ...h, [current]: v }))).catch(() => {});
-  }, [fetchHand, current]);
+    if (useFixture) return;
+    (async () => {
+      try {
+        const sm = await fetchHandSummaries();
+        if (sm.length === 0) {
+          // Empty live DB — fall back to fixture for the demo experience
+          setSummaries(FIXTURE_HAND_SUMMARIES);
+          setHands(FIXTURE_HANDS);
+          setCurrent(FIXTURE_HAND_SUMMARIES[0]?.name ?? 'max');
+          setLiveStatus('fixture');
+          return;
+        }
+        setSummaries(sm);
+        if (sm[0] && (!current || !sm.find((h) => h.name === current))) {
+          setCurrent(sm[0].name);
+        }
+        setLiveStatus('live');
+      } catch {
+        setSummaries(FIXTURE_HAND_SUMMARIES);
+        setHands(FIXTURE_HANDS);
+        setLiveStatus('offline');
+      }
+    })();
+  }, [useFixture]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    refreshCurrentHand();
+  }, [refreshCurrentHand]);
+
+  // ─── SSE live updates ──────────────────────────────────────────
+  // Re-fetch the current hand on dossier/interjection/block events. We
+  // could selectively patch the local state, but a full refetch is
+  // simpler and the payload is small.
+  useEffect(() => {
+    if (useFixture) return;
+    const cleanup = subscribeToStream((evt) => {
+      if (evt.type === 'hello') return;
+      refreshCurrentHand();
+    });
+    return cleanup;
+  }, [refreshCurrentHand, useFixture]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -108,9 +166,16 @@ export function HandsConsoleApp({ fetchHand, fetchHandSummaries }: Props = {}) {
             prev && prev.key === key && prev.index === index ? null : { key, index }
           );
         }}
+        onApprove={async (runId) => { await approveRun(runId); await refreshCurrentHand(); }}
+        onReject={async (runId, reason) => { await rejectRun(runId, reason); await refreshCurrentHand(); }}
+        onStop={async (runId) => { await stopRun(runId); await refreshCurrentHand(); }}
+        live={liveStatus === 'live'}
       />
       <div className={s.footerHint}>
-        Prototype v4 → React (P3 · fixture-driven). Live data wires in at P4.
+        {liveStatus === 'live' ? '● live — sidecar connected' :
+         liveStatus === 'connecting' ? '○ connecting to sidecar…' :
+         liveStatus === 'offline' ? '◌ sidecar offline — showing bundled fixture' :
+         '◌ fixture mode (no live data)'}
       </div>
     </div>
   );
@@ -380,11 +445,16 @@ function TicketCard({
 
 function SidePanel({
   ticket, expandedStep, onClose, onToggleStep,
+  onApprove, onReject, onStop, live,
 }: {
   ticket: Ticket | null;
   expandedStep: { key: string; index: number } | null;
   onClose: () => void;
   onToggleStep: (key: string, index: number) => void;
+  onApprove: (runId: number) => Promise<void>;
+  onReject: (runId: number, reason: string) => Promise<void>;
+  onStop: (runId: number) => Promise<void>;
+  live: boolean;
 }) {
   if (!ticket) {
     return <div className={s.sidePanel} />;
@@ -403,7 +473,10 @@ function SidePanel({
         <PanelGoal ticket={ticket} />
         <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
         <PanelNow ticket={ticket} />
-        <PanelDecideOrWatching ticket={ticket} />
+        <PanelDecideOrWatching
+          ticket={ticket} live={live}
+          onApprove={onApprove} onReject={onReject} onStop={onStop}
+        />
         {isExpanded && expandedStep && (
           <ExpandPane
             ticket={ticket}
@@ -478,13 +551,37 @@ function PanelNow({ ticket }: { ticket: Ticket }) {
   );
 }
 
-function PanelDecideOrWatching({ ticket }: { ticket: Ticket }) {
-  if (ticket.attention) return <Decide ticket={ticket} />;
+function PanelDecideOrWatching({
+  ticket, live, onApprove, onReject, onStop,
+}: {
+  ticket: Ticket; live: boolean;
+  onApprove: (runId: number) => Promise<void>;
+  onReject: (runId: number, reason: string) => Promise<void>;
+  onStop: (runId: number) => Promise<void>;
+}) {
+  if (ticket.attention) return <Decide ticket={ticket} live={live} onApprove={onApprove} onReject={onReject} onStop={onStop} />;
   if (ticket.next_checkpoint || ticket.next_eta_seconds !== undefined) return <Watching ticket={ticket} />;
   return null;
 }
 
-function Decide({ ticket }: { ticket: Ticket }) {
+function Decide({
+  ticket, live, onApprove, onReject, onStop,
+}: {
+  ticket: Ticket; live: boolean;
+  onApprove: (runId: number) => Promise<void>;
+  onReject: (runId: number, reason: string) => Promise<void>;
+  onStop: (runId: number) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const runId = ticket.run_id;
+  const canAct = live && runId !== undefined;
+
+  const guard = async (fn: () => Promise<void>) => {
+    if (!canAct || pending) return;
+    setPending(true);
+    try { await fn(); } finally { setPending(false); }
+  };
+
   return (
     <div className={`${s.section} ${s.sectionDecide}`}>
       <div className={s.sectionLabel}>
@@ -525,9 +622,31 @@ function Decide({ ticket }: { ticket: Ticket }) {
           </div>
         )}
         <div className={s.actions}>
-          <button className={`${s.btn} ${s.btnPrimary}`}>Approve</button>
-          <button className={`${s.btn} ${s.btnDanger}`}>Reject</button>
-          <button className={`${s.btn} ${s.btnTakeover}`}>⤵ Drop into chat</button>
+          <button
+            className={`${s.btn} ${s.btnPrimary}`}
+            disabled={!canAct || pending}
+            onClick={() => guard(() => onApprove(runId!))}
+            title={canAct ? '' : 'Approve disabled — no live run_id (fixture mode or not connected)'}
+          >
+            {pending ? 'Approving…' : 'Approve'}
+          </button>
+          <button
+            className={`${s.btn} ${s.btnDanger}`}
+            disabled={!canAct || pending}
+            onClick={() => {
+              const reason = window.prompt('Reject reason (optional):', '') ?? '';
+              guard(() => onReject(runId!, reason));
+            }}
+          >
+            Reject
+          </button>
+          <button
+            className={`${s.btn} ${s.btnTakeover}`}
+            disabled={!canAct || pending}
+            onClick={() => guard(() => onStop(runId!))}
+          >
+            ◼ Stop run
+          </button>
         </div>
       </div>
     </div>
