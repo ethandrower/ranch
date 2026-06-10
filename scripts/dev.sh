@@ -38,6 +38,9 @@ done
 export RANCH_HOME="$DEV_HOME"
 export RANCH_DATABASE_URL="sqlite:///$DEV_HOME/ranch.db"
 export RANCH_API_PORT=8421
+# Launch the rebuilt HandsConsole UI by default in dev. To boot into the
+# legacy pty terminal app instead, unset this before running.
+export VITE_RANCH_VIEW=hands
 # Belt-and-suspenders: even though package.json's name change already
 # redirects Electron's userData, set ELECTRON_USER_DATA in case any code
 # path opts into reading it.
