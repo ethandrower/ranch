@@ -1,8 +1,8 @@
 {
-  "name": "ranch-console",
-  "version": "0.1.0",
+  "name": "ranch-console-dev",
+  "version": "0.1.0-dev",
   "private": true,
-  "description": "Local-first Electron console for ranch (Claude Code agent fleet manager)",
+  "description": "DEV worktree (feat/hands-console-ui) — isolated from the live ranch-console. Different package name → different Electron userData (~/Library/Application Support/ranch-console-dev/).",
   "main": "dist/main/index.js",
   "type": "module",
   "scripts": {

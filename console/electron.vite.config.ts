@@ -36,6 +36,13 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     plugins: [react()],
+    // DEV worktree — pin to 5174 so we never collide with the live console
+    // on 5173. `strictPort` makes the server fail loudly if 5174 is also
+    // taken rather than silently incrementing into someone else's slot.
+    server: {
+      port: 5174,
+      strictPort: true,
+    },
     build: {
       outDir: 'dist/renderer',
       rollupOptions: {
