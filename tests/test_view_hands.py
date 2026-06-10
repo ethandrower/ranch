@@ -135,10 +135,19 @@ def test_run_with_pr_id_no_reviews_is_pr_open():
     assert view["tickets"][0]["pr_id"] == "1234"
 
 
-def test_run_with_pr_and_pre_push_history_is_review():
+def test_run_with_pr_and_pre_push_history_is_pr_open_until_comments():
+    """Phase B-era projection: pre_push + pr_id alone is just-pushed (pr_open).
+    Stage advances to review only when an unresolved review comment arrives."""
     with db_session() as s:
         r = _add_run(s, ticket="ECD-5", state="in_qa", pr_id="1620", pr_platform="bb")
         s.add(Checkpoint(run_id=r.id, kind="pre_push", summary="ready", decision="approved"))
+    view = build_hand_view("max")
+    assert view["tickets"][0]["stage"] == "pr_open"
+
+    # Comment arrives → flips to review
+    with db_session() as s:
+        s.add(ReviewComment(run_id=r.id, platform_comment_id="c-2",
+                            body="why?", resolved=0))
     view = build_hand_view("max")
     assert view["tickets"][0]["stage"] == "review"
 
@@ -253,9 +262,21 @@ def test_hand_with_in_development_run_is_running():
 # ─── Ended runs filtered out ──────────────────────────────────────
 
 
-def test_ended_runs_are_not_in_view():
+def test_recently_ended_runs_stay_visible():
+    """Phase B: ended runs within the 14-day window remain on the board so
+    parked propose runs awaiting operator review and just-merged tickets
+    stay visible. Older runs drop off."""
     with db_session() as s:
         _add_run(s, ticket="ECD-50", state="completed",
                  ended_at=datetime.now(timezone.utc) - timedelta(days=1))
+    view = build_hand_view("max")
+    assert len(view["tickets"]) == 1
+    assert view["tickets"][0]["key"] == "ECD-50"
+
+
+def test_very_old_ended_runs_drop_off():
+    with db_session() as s:
+        _add_run(s, ticket="ECD-51", state="completed",
+                 ended_at=datetime.now(timezone.utc) - timedelta(days=30))
     view = build_hand_view("max")
     assert view["tickets"] == []

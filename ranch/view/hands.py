@@ -47,30 +47,33 @@ STAGES = (
 )
 
 
-def _project_stage(run: Run, latest_cp_kind: Optional[str], latest_dossier_state: Optional[str]) -> str:
+def _project_stage(
+    run: Run,
+    latest_cp_kind: Optional[str],
+    latest_dossier_state: Optional[str],
+    *,
+    has_review_comments: bool = False,
+) -> str:
     """Pick the kanban column this run belongs in.
 
     Precedence (most specific first):
-    - Run.state == "merged"           → merge
-    - Run has pr_id + last cp resolved → review (we're past pre_push and PR exists)
-    - Run has pr_id, awaiting reviews  → pr_open
-    - Run.deployed_at set              → deploy (parked or just-deployed pre-PR)
-    - Last checkpoint kind == pre_push → pre_push
-    - Dossier state == "testing"      → verify
-    - Dossier state == "coding"       → code
-    - Last checkpoint kind == plan_ready → plan
-    - Dossier state == "planning"     → plan
-    - Run.state == "queued"           → triage
-    - Anything else                    → scope (researching, judging)
+    - Run.state == "merged"                          → merge
+    - Run has pr_id + has unresolved review comments → review
+    - Run has pr_id (just-pushed, no reviews yet)    → pr_open
+    - Run.deployed_at set                            → deploy
+    - Last checkpoint kind == pre_push               → pre_push
+    - Dossier state == "testing"                     → verify
+    - Dossier state == "coding"                      → code
+    - Last checkpoint kind == plan_ready
+        OR Dossier state == "planning"               → plan
+    - Run.state == "queued"                          → triage
+    - Anything else                                  → scope
     """
     if run.state == "merged":
         return "merge"
     if run.pr_id:
-        # Differentiate pr_open vs review by whether reviews have started.
-        # Cheap proxy: any inbound review_comment rows = review; else pr_open.
-        # Caller injects this via the view builder; here we default to review
-        # if last_cp_kind is "pre_push" (means we've pushed and PR exists).
-        return "review" if latest_cp_kind == "pre_push" else "pr_open"
+        # Reviews start when comments arrive — not when the PR opens.
+        return "review" if has_review_comments else "pr_open"
     if run.deployed_at is not None:
         return "deploy"
     if latest_cp_kind == "pre_push":
@@ -191,7 +194,11 @@ def _ticket_view(session: Session, run: Run) -> dict[str, Any]:
     just_did = dossier.payload.get("just_did") if dossier else None
     blocker_text = dossier.payload.get("blocker") if dossier else None
 
-    stage = _project_stage(run, latest_cp, dossier.state if dossier else None)
+    unresolved_comments = _unresolved_review_comment_count(session, run.id)
+    stage = _project_stage(
+        run, latest_cp, dossier.state if dossier else None,
+        has_review_comments=unresolved_comments > 0,
+    )
 
     attention = bool(pending_cp) or bool(block) or run.state == "needs_approval"
 
@@ -226,7 +233,7 @@ def _ticket_view(session: Session, run: Run) -> dict[str, Any]:
 
     if run.pr_id:
         out["pr_id"] = run.pr_id
-        if _unresolved_review_comment_count(session, run.id) > 0:
+        if unresolved_comments > 0:
             out["decide_kind"] = "respond_to_review"
 
     return out
@@ -257,17 +264,35 @@ def build_hand_view(hand_name: str) -> dict[str, Any]:
     Returns a dict ready for JSON serialization. Status, initiatives,
     tickets, adhoc, events_log shapes match the prototype contract.
     """
+    from datetime import datetime, timedelta, timezone
+    # Show: (a) anything in flight, (b) anything terminal within a short
+    # window so parked propose runs awaiting operator review, just-merged
+    # runs, and recently-stopped errors stay visible on the kanban. Older
+    # runs disappear so the board doesn't grow unboundedly.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
     with db_session() as session:
         runs = (
             session.execute(
                 select(Run)
                 .where(Run.agent == hand_name)
-                .where(Run.ended_at.is_(None))
+                .where((Run.ended_at.is_(None)) | (Run.ended_at >= cutoff))
                 .order_by(Run.started_at.desc())
             )
             .scalars()
             .all()
         )
+        # Per-ticket dedupe: a ticket can have a propose run AND an execute
+        # run alive in the same window; we want the execute (more recent)
+        # to win and the propose to drop out so the kanban shows one card.
+        seen_tickets: set[str] = set()
+        deduped: list[Run] = []
+        for run in runs:
+            if run.ticket:
+                if run.ticket in seen_tickets:
+                    continue
+                seen_tickets.add(run.ticket)
+            deduped.append(run)
+        runs = deduped
 
         tickets: list[dict[str, Any]] = []
         adhoc: list[dict[str, Any]] = []
