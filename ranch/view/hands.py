@@ -84,6 +84,11 @@ def _project_stage(
         return "code"
     if latest_cp_kind == "plan_ready" or latest_dossier_state == "planning":
         return "plan"
+    # A parked propose without an explicit checkpoint (the agent self-
+    # parked rather than calling record_checkpoint("plan_ready")) is
+    # still awaiting the plan-approval gate. Project to `plan`.
+    if latest_dossier_state == "parked":
+        return "plan"
     if run.state == "queued":
         return "triage"
     return "scope"
@@ -200,7 +205,13 @@ def _ticket_view(session: Session, run: Run) -> dict[str, Any]:
         has_review_comments=unresolved_comments > 0,
     )
 
-    attention = bool(pending_cp) or bool(block) or run.state == "needs_approval"
+    # Anything awaiting the operator: an explicit pending checkpoint, a
+    # block, the legacy "needs_approval" run state, OR a parked dossier
+    # (propose self-parks for plan-approval without an explicit checkpoint).
+    is_parked = bool(dossier and dossier.state == "parked")
+    attention = (
+        bool(pending_cp) or bool(block) or run.state == "needs_approval" or is_parked
+    )
 
     out: dict[str, Any] = {
         "key": run.ticket or f"(run-{run.id})",
@@ -235,6 +246,17 @@ def _ticket_view(session: Session, run: Run) -> dict[str, Any]:
         out["pr_id"] = run.pr_id
         if unresolved_comments > 0:
             out["decide_kind"] = "respond_to_review"
+
+    # Operator-kickoff flow: surface the triage score + auto-discovered marker
+    # so the UI can rank the triage column and show a "Kick off" button.
+    if run.state == "queued":
+        out["queued"] = True
+        if run.triage_score is not None:
+            out["triage_score"] = run.triage_score
+        if run.triage_summary:
+            # Use triage_summary as the headline if present (Jira summary).
+            out["summary"] = run.triage_summary
+        out["run_id"] = run.id  # needed for the kickoff button
 
     return out
 

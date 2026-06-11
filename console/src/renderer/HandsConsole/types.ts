@@ -60,6 +60,10 @@ export interface Ticket {
   hint?: string;
   adhoc?: boolean;
   run_id?: number;
+  // Operator-kickoff flow: present when the hand has auto-discovered
+  // this ticket via triage and queued it for the operator to kick off.
+  queued?: boolean;
+  triage_score?: number;
 }
 
 export interface RoutineState {

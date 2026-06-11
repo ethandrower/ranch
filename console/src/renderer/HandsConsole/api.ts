@@ -73,6 +73,10 @@ export async function stopRun(runId: number): Promise<void> {
   await jsonFetch(`/api/runs/${runId}/stop`, { method: 'POST' });
 }
 
+export async function kickoffRun(runId: number): Promise<void> {
+  await jsonFetch(`/api/runs/${runId}/kickoff`, { method: 'POST' });
+}
+
 export async function blockRun(runId: number, blockerTicket: string, reason: string): Promise<void> {
   await jsonFetch(`/api/runs/${runId}/block`, {
     method: 'POST',

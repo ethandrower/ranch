@@ -114,17 +114,45 @@ TERMINAL_RUN_STATES = {"completed", "stopped", "error"}
 
 
 def _active_run_for(agent: str) -> Optional["Run"]:
-    """Return the most-recent non-terminal Run for this agent, or None."""
+    """Return the most-recent non-terminal Run for this agent, excluding
+    queued runs (those are awaiting operator kickoff, not in flight)."""
     with db_session() as db:
         run = (
             db.query(Run)
             .filter(Run.agent == agent)
             .filter(~Run.state.in_(TERMINAL_RUN_STATES))
+            .filter(Run.state != "queued")
             .order_by(Run.started_at.desc())
             .first()
         )
         if not run:
             return None
+        return _snapshot_run(run)
+
+
+def _find_kicked_off_queued_run(agent: str) -> Optional["Run"]:
+    """Operator clicked Kick off on a queued triage candidate. Returns the
+    Run with the oldest unprocessed `kickoff` interjection, consuming it
+    in the same transaction so the same kickoff can't fire propose twice.
+    """
+    with db_session() as db:
+        candidate = (
+            db.query(Run, Interjection)
+            .join(Interjection, Interjection.run_id == Run.id)
+            .filter(Run.agent == agent)
+            .filter(Run.state == "queued")
+            .filter(Interjection.kind == "kickoff")
+            .filter(Interjection.processed_at.is_(None))
+            .order_by(Interjection.id.asc())
+            .first()
+        )
+        if not candidate:
+            return None
+        run, ij = candidate
+        ij.processed_at = datetime.now(timezone.utc)
+        # Move Run out of queued so subsequent ticks don't re-pick it via
+        # the queued check, and `_active_run_for` now sees it as in flight.
+        run.state = "planning"
         return _snapshot_run(run)
 
 
@@ -416,11 +444,80 @@ class RanchHand:
         ranked = triage(tickets, in_flight)
         return [t.key for t, _ in ranked]
 
+    def _discover_and_queue(self, *, max_queue: int = 10) -> int:
+        """Pull ranked triage candidates from Jira via the resolved
+        backend, then materialize each as a `state=queued` Run row
+        (unless one already exists for that ticket). Stores triage_score
+        + triage_summary so the UI can rank + summarize without re-hitting
+        Jira.
+
+        Does NOT fire propose. The operator clicks Kick off in the UI
+        (or `ranch kickoff <run_id>`) to actually start work on a queued
+        candidate.
+
+        Returns the number of new queued rows created.
+        """
+        from .jira_backend import resolve_jira_client
+        from .triage import in_flight_ticket_keys_for_agent, triage
+
+        try:
+            client_ctx, hand_account = resolve_jira_client()
+        except Exception as e:
+            console.print(f"[yellow]{self.name}: Jira backend unavailable — {e}[/yellow]")
+            return 0
+
+        in_flight = in_flight_ticket_keys_for_agent(self.name)
+        with client_ctx as client:
+            tickets = client.list_for_hand(
+                self.name,
+                assignee_account=hand_account or None,
+                project=self.jira_project,
+            )
+        ranked = triage(tickets, in_flight)
+        ranked = ranked[:max_queue]
+        if not ranked:
+            return 0
+
+        created = 0
+        with db_session() as db:
+            for ticket, score in ranked:
+                # Skip if already queued OR if we have any active/parked
+                # run for this ticket — don't trample real work.
+                already = (
+                    db.query(Run)
+                    .filter(Run.agent == self.name, Run.ticket == ticket.key)
+                    .order_by(Run.started_at.desc())
+                    .first()
+                )
+                if already and (
+                    already.state == "queued"
+                    or already.state not in TERMINAL_RUN_STATES
+                    or (already.ended_at is not None
+                        and (datetime.now(timezone.utc) - already.ended_at) < AWAITING_APPROVAL_WINDOW)
+                ):
+                    continue
+
+                db.add(Run(
+                    agent=self.name,
+                    ticket=ticket.key,
+                    state="queued",
+                    cwd=str(self.cwd),
+                    initial_prompt=ticket.summary,
+                    triage_score=int(round(score.total)),
+                    triage_summary=ticket.summary,
+                    started_at=datetime.now(timezone.utc),
+                ))
+                created += 1
+        return created
+
     def _default_scope(self, ticket_key: str) -> None:
-        """Build + save the scope bundle via H5."""
+        """Build + save the scope bundle via H5. Uses the resolved Jira
+        backend (trinity by default) — same as triage above."""
+        from .jira_backend import resolve_jira_client
         from .scope import build_scope, save_scope
-        from .triage import JiraClient, JiraConfig
-        with JiraClient(JiraConfig.load()) as client:
+
+        client_ctx, _ = resolve_jira_client()
+        with client_ctx as client:
             scope = build_scope(ticket_key, jira=client, cwd=self.cwd)
         save_scope(scope)
 
@@ -667,42 +764,45 @@ class RanchHand:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                # 5. Nothing in flight, nothing parked → triage for new work.
-                console.print(f"[cyan]{self.name}: no active work — triaging...[/cyan]")
+                # 5. Operator kicked off a queued triage candidate? Fire
+                #    propose for it. This is the explicit "go" gate — propose
+                #    NEVER fires without an operator kickoff under the
+                #    operator-controlled discovery flow.
+                kicked = _find_kicked_off_queued_run(self.name)
+                if kicked:
+                    ticket = kicked.ticket
+                    console.print(f"[bold green]{self.name}: kicking off {ticket} (operator approved)[/bold green]")
+                    try:
+                        self.scope_fn(ticket)
+                    except Exception as e:
+                        console.print(f"[red]{self.name}: scope failed for {ticket} — {e}[/red]")
+                        await asyncio.sleep(self.poll_seconds)
+                        continue
+                    try:
+                        await self.propose_fn(ticket)
+                    except Exception as e:
+                        console.print(f"[red]{self.name}: propose failed for {ticket} — {e}[/red]")
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
+                # 6. Nothing in flight, nothing parked → triage for new work
+                #    and queue the top candidates as `state=queued` Runs so
+                #    the operator can see them in the UI's Triage column,
+                #    ranked by score, and pick which to kick off.
+                console.print(f"[dim]{self.name}: scanning Jira for routed work...[/dim]")
                 try:
-                    candidates = self.triage_fn(self.jira_project)
+                    queued_count = self._discover_and_queue()
                 except Exception as e:
-                    console.print(f"[red]{self.name}: triage failed — {e}[/red]")
+                    console.print(f"[red]{self.name}: discovery failed — {e}[/red]")
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                if not candidates:
-                    self._maybe_log_idle("no viable tickets — staying idle")
-                    await asyncio.sleep(self.poll_seconds)
-                    continue
-
-                ticket = candidates[0]
-                console.print(f"[bold green]{self.name}: picked {ticket}[/bold green]")
-
-                # 4. Scope it
-                try:
-                    self.scope_fn(ticket)
-                except Exception as e:
-                    console.print(f"[red]{self.name}: scope failed for {ticket} — {e}[/red]")
-                    await asyncio.sleep(self.poll_seconds)
-                    continue
-
-                # 5. Propose
-                console.print(f"[cyan]{self.name}: proposing plan for {ticket}...[/cyan]")
-                try:
-                    await self.propose_fn(ticket)
-                except Exception as e:
-                    console.print(f"[red]{self.name}: propose failed for {ticket} — {e}[/red]")
-                    await asyncio.sleep(self.poll_seconds)
-                    continue
-
-                console.print(f"[green]{self.name}: {ticket} parked at propose — next cycle will wait for review[/green]")
-                # Loop continues: next iteration sees the parked run + waits
+                if queued_count == 0:
+                    self._maybe_log_idle("no routed tickets in Jira — staying idle")
+                else:
+                    self._maybe_log_idle(
+                        f"queued {queued_count} new triage candidate(s) — awaiting operator kickoff"
+                    )
 
         finally:
             _clear_pid(self.name)

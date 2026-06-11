@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import s from './styles.module.css';
 import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
 import {
-  approveRun, rejectRun, stopRun,
+  approveRun, rejectRun, stopRun, kickoffRun,
   fetchHand, fetchHandSummaries, fetchStepDetails,
   subscribeToStream,
 } from './api';
@@ -110,7 +110,13 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
   const hand = hands[current];
   if (!hand) return <div className={s.root}>No hand data.</div>;
 
-  const initiative = currentInitiative[current] ?? hand.default_initiative ?? hand.initiatives[0] ?? null;
+  // Initiative scoping is optional. When no initiatives are configured for
+  // the hand, the kanban shows ALL tickets (no filter). Once at least one
+  // HandInitiative exists, we respect the user's pill selection (or the
+  // hand's default).
+  const initiative = hand.initiatives.length === 0
+    ? null
+    : (currentInitiative[current] ?? hand.default_initiative ?? hand.initiatives[0] ?? null);
   const epic = drilledEpic[current] ?? null;
 
   const closePanel = () => {
@@ -156,6 +162,7 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
         }}
         onEpicClick={(e) => setDrilledEpic({ ...drilledEpic, [current]: e })}
         onBlockedJump={(k) => setSelectedKey(k)}
+        onKickoff={async (runId) => { await kickoffRun(runId); await refreshCurrentHand(); }}
       />
       <SidePanel
         ticket={findTicket(hand, selectedKey)}
@@ -333,13 +340,14 @@ function ScopeBar({
 // ─── Kanban ──────────────────────────────────────────────────────
 
 function Kanban({
-  hand, initiative, epic, selectedKey, onCardClick, onEpicClick, onBlockedJump,
+  hand, initiative, epic, selectedKey, onCardClick, onEpicClick, onBlockedJump, onKickoff,
 }: {
   hand: HandView; initiative: string | null; epic: string | null;
   selectedKey: string | null;
   onCardClick: (key: string) => void;
   onEpicClick: (epic: string) => void;
   onBlockedJump: (key: string) => void;
+  onKickoff: (runId: number) => Promise<void>;
 }) {
   const all = [...hand.tickets, ...hand.adhoc];
   const visible = all.filter((t) => {
@@ -388,6 +396,7 @@ function Kanban({
                       onClick={() => onCardClick(t.key)}
                       onEpicClick={onEpicClick}
                       onBlockedClick={onBlockedJump}
+                      onKickoff={onKickoff}
                     />
                   ))
                 )}
@@ -401,13 +410,21 @@ function Kanban({
 }
 
 function TicketCard({
-  ticket, selected, onClick, onEpicClick, onBlockedClick,
+  ticket, selected, onClick, onEpicClick, onBlockedClick, onKickoff,
 }: {
   ticket: Ticket; selected: boolean;
   onClick: () => void;
   onEpicClick: (e: string) => void;
   onBlockedClick: (k: string) => void;
+  onKickoff: (runId: number) => Promise<void>;
 }) {
+  const [pending, setPending] = useState(false);
+  const handleKickoff = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!ticket.run_id || pending) return;
+    setPending(true);
+    try { await onKickoff(ticket.run_id); } finally { setPending(false); }
+  };
   return (
     <div
       className={`${s.card} ${ticket.attention ? s.cardAttention : ''} ${selected ? s.cardSelected : ''} ${ticket.blocked_by ? s.cardBlocked : ''}`}
@@ -415,6 +432,11 @@ function TicketCard({
     >
       <div className={`${s.cardKey} ${ticket.adhoc ? s.cardKeyAdhoc : ''}`}>
         <span>{ticket.key}</span>
+        {ticket.triage_score !== undefined && (
+          <span className={s.epicChip} title="Triage viability score" style={{ background: 'var(--panel-3)' }}>
+            ★ {ticket.triage_score}
+          </span>
+        )}
         {ticket.epic && (
           <span
             className={s.epicChip}
@@ -437,6 +459,19 @@ function TicketCard({
       </div>
       <div className={s.cardSummary}>{ticket.summary}</div>
       {ticket.hint && <div className={s.cardHint}>{ticket.hint}</div>}
+      {ticket.queued && ticket.run_id !== undefined && (
+        <div style={{ marginTop: 8 }}>
+          <button
+            className={`${s.btn} ${s.btnPrimary}`}
+            style={{ width: '100%', fontSize: 11, padding: '4px 8px' }}
+            disabled={pending}
+            onClick={handleKickoff}
+            title="Tell the hand to fire propose on this ticket"
+          >
+            {pending ? 'kicking off…' : '▶ Kick off'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

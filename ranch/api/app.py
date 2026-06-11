@@ -308,6 +308,24 @@ def create_app() -> FastAPI:
     def stop(run_id: int) -> dict:
         return _queue_interjection(run_id, "stop", "")
 
+    @app.post("/api/runs/{run_id}/kickoff")
+    def kickoff(run_id: int) -> dict:
+        """Operator kickoff: tell the hand to fire propose on a queued
+        triage candidate. The hand's main loop picks up the kickoff
+        interjection on its next tick and runs scope + propose."""
+        with db_session() as s:
+            run = s.query(Run).filter_by(id=run_id).one_or_none()
+            if run is None:
+                raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+            if run.state != "queued":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Run #{run_id} is in state '{run.state}', not 'queued'.",
+                )
+        out = _queue_interjection(run_id, "kickoff", "")
+        publish("kickoff", {"run_id": run_id, "hand": run.agent, "ticket": run.ticket})
+        return out
+
     # ─── Mutations: block / unblock ───────────────────────────────
 
     @app.post("/api/runs/{run_id}/block")

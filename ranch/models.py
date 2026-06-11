@@ -170,6 +170,11 @@ class Run(Base):
     # Denormalized for fast board-per-initiative filtering; source of truth
     # is the Jira label, captured at triage time. Nullable for legacy runs.
     initiative_key      = Column(String, ForeignKey("initiatives.key"), nullable=True, index=True)
+    # Operator-kickoff flow: triage queues Runs in state='queued' with the
+    # hand's viability score; the operator picks which to kick off via the
+    # UI. Score is shown on the triage card as ranking signal.
+    triage_score        = Column(Integer, nullable=True)
+    triage_summary      = Column(Text, nullable=True)  # Jira summary, copied at queue time
 
     checkpoints    = relationship("Checkpoint",    back_populates="run", lazy="dynamic")
     interjections  = relationship("Interjection",  back_populates="run", lazy="dynamic")
