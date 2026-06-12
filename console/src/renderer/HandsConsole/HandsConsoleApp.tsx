@@ -61,15 +61,18 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
 
   useEffect(() => {
     if (useFixture) return;
-    (async () => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryConnect = async () => {
       try {
         const sm = await fetchHandSummaries();
+        if (cancelled) return;
         if (sm.length === 0) {
-          // Empty live DB — fall back to fixture for the demo experience
-          setSummaries(FIXTURE_HAND_SUMMARIES);
-          setHands(FIXTURE_HANDS);
-          setCurrent(FIXTURE_HAND_SUMMARIES[0]?.name ?? 'max');
-          setLiveStatus('fixture');
+          // Live sidecar reachable but DB has no hands yet. Show "live"
+          // status with no tickets; the kanban renders the empty state.
+          setSummaries([]);
+          setLiveStatus('live');
           return;
         }
         setSummaries(sm);
@@ -78,11 +81,24 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
         }
         setLiveStatus('live');
       } catch {
-        setSummaries(FIXTURE_HAND_SUMMARIES);
-        setHands(FIXTURE_HANDS);
-        setLiveStatus('offline');
+        if (cancelled) return;
+        // Sidecar unreachable. Keep showing whatever we last had (fixture
+        // on first failure, the real data if we'd connected before).
+        setLiveStatus((prev) => (prev === 'live' ? 'offline' : 'offline'));
+        if (Object.keys(hands).length === 0) {
+          setSummaries(FIXTURE_HAND_SUMMARIES);
+          setHands(FIXTURE_HANDS);
+        }
+        // Retry every 5s so a sidecar that comes up later catches up.
+        retryTimer = setTimeout(tryConnect, 5_000);
       }
-    })();
+    };
+
+    tryConnect();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [useFixture]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
