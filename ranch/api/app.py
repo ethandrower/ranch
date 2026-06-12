@@ -239,6 +239,35 @@ def create_app() -> FastAPI:
         from ..view.step_details import step_details_for_ticket
         return step_details_for_ticket(key)
 
+    @app.get("/api/tickets/{key}/jira-context")
+    def get_jira_context(key: str) -> dict:
+        """Read-side Jira context bundle for the side panel — description,
+        comments, status, priority, labels, assignee — so the operator
+        doesn't have to flip to Jira to read the ticket.
+
+        Routed through the resolved Jira backend; in trinity-mode this
+        is `trinity --json jira show <KEY> --comments`, one subprocess
+        hop. Returns the raw normalized shape; UI handles truncation
+        and expand.
+        """
+        from ..jira_backend import resolve_jira_client
+        try:
+            client_ctx, _ = resolve_jira_client()
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Jira backend unavailable: {e}")
+        try:
+            with client_ctx as client:
+                if not hasattr(client, "get_ticket_context"):
+                    raise HTTPException(
+                        status_code=501,
+                        detail="Active Jira backend does not support get_ticket_context.",
+                    )
+                return client.get_ticket_context(key)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Jira fetch failed: {e}")
+
     @app.get("/api/tickets/{key}")
     def get_ticket(key: str) -> dict:
         """Single-ticket detail bundle. Finds the active Run for this ticket

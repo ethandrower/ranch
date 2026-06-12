@@ -48,6 +48,34 @@ export async function fetchStepDetails(ticketKey: string): Promise<Record<string
   return jsonFetch<Record<string, string>>(`/api/tickets/${encodeURIComponent(ticketKey)}/step-details`);
 }
 
+export interface JiraComment {
+  id: string;
+  author: string;
+  body: string;
+  created: string;
+  updated?: string;
+}
+
+export interface JiraContext {
+  key: string;
+  summary: string;
+  description: string;
+  status: string;
+  priority: string | null;
+  type: string | null;
+  labels: string[];
+  assignee?: { name?: string; email?: string };
+  reporter?: { name?: string };
+  created: string;
+  updated: string;
+  epic_key: string | null;
+  comments: JiraComment[];
+}
+
+export async function fetchJiraContext(ticketKey: string): Promise<JiraContext> {
+  return jsonFetch<JiraContext>(`/api/tickets/${encodeURIComponent(ticketKey)}/jira-context`);
+}
+
 export async function approveRun(runId: number, note = ''): Promise<{ unblocked?: number }> {
   return jsonFetch<{ unblocked?: number }>(`/api/runs/${runId}/approve`, {
     method: 'POST',

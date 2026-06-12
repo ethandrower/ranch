@@ -3,9 +3,10 @@ import s from './styles.module.css';
 import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
 import {
   approveRun, rejectRun, stopRun, kickoffRun,
-  fetchHand, fetchHandSummaries, fetchStepDetails,
+  fetchHand, fetchHandSummaries, fetchStepDetails, fetchJiraContext,
   subscribeToStream,
 } from './api';
+import type { JiraContext, JiraComment } from './api';
 import type { HandSummary, HandView, Stage, Ticket } from './types';
 
 const STAGES: Array<{ key: Stage; label: string; terminal?: boolean }> = [
@@ -522,6 +523,7 @@ function SidePanel({
       </div>
       <div className={`${s.panelBody} ${isExpanded ? s.panelBodyHasExpand : ''}`}>
         <PanelGoal ticket={ticket} />
+        <PanelJiraContext ticket={ticket} />
         <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
         <PanelNow ticket={ticket} />
         <PanelDecideOrWatching
@@ -547,6 +549,182 @@ function PanelGoal({ ticket }: { ticket: Ticket }) {
         <span className={s.sectionNum}>1</span> GOAL
       </div>
       <div className={s.sectionContent}>{ticket.goal || '(no goal recorded)'}</div>
+    </div>
+  );
+}
+
+function PanelJiraContext({ ticket }: { ticket: Ticket }) {
+  const [ctx, setCtx] = useState<JiraContext | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setCtx(null);
+    setDescExpanded(false);
+    setExpandedComments(new Set());
+    fetchJiraContext(ticket.key)
+      .then((c) => { if (!cancelled) setCtx(c); })
+      .catch((e) => { if (!cancelled) setError(String(e?.message ?? e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [ticket.key]);
+
+  if (loading) {
+    return (
+      <div className={`${s.section}`}>
+        <div className={s.sectionLabel}><span className={s.sectionNum}>★</span> JIRA</div>
+        <div className={s.sectionContent} style={{ color: 'var(--text-faint)' }}>(loading…)</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className={`${s.section}`}>
+        <div className={s.sectionLabel}><span className={s.sectionNum}>★</span> JIRA</div>
+        <div className={s.sectionContent} style={{ color: 'var(--bad)' }}>Could not load: {error}</div>
+      </div>
+    );
+  }
+  if (!ctx) return null;
+
+  const DESC_TRUNCATE = 600;
+  const descTooLong = ctx.description.length > DESC_TRUNCATE;
+  const descShown = descExpanded || !descTooLong
+    ? ctx.description
+    : ctx.description.slice(0, DESC_TRUNCATE) + '…';
+
+  const COMMENT_TRUNCATE = 240;
+
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>★</span> JIRA
+      </div>
+      <div className={s.sectionContent}>
+        {/* Meta row */}
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: 10,
+          fontSize: 11, color: 'var(--text-dim)', marginBottom: 12,
+          fontFamily: 'SF Mono, monospace',
+        }}>
+          {ctx.status && <span>● {ctx.status}</span>}
+          {ctx.priority && <span>· {ctx.priority}</span>}
+          {ctx.type && <span>· {ctx.type}</span>}
+          {ctx.assignee?.name && <span>· {ctx.assignee.name}</span>}
+          {ctx.labels.length > 0 && (
+            <span>· {ctx.labels.map((l) => `#${l}`).join(' ')}</span>
+          )}
+        </div>
+
+        {/* Description with expand */}
+        <div style={{
+          background: 'var(--panel-3)', borderRadius: 4,
+          padding: '10px 12px', fontSize: 12, lineHeight: 1.55,
+          whiteSpace: 'pre-wrap', color: 'var(--text)',
+          marginBottom: 12,
+        }}>
+          {descShown || '(no description)'}
+          {descTooLong && (
+            <button
+              onClick={() => setDescExpanded(!descExpanded)}
+              style={{
+                marginLeft: 6, background: 'transparent', border: 'none',
+                color: 'var(--accent)', cursor: 'pointer', padding: 0,
+                fontSize: 11, fontFamily: 'inherit',
+              }}
+            >
+              {descExpanded ? '↑ collapse' : '↓ expand'}
+            </button>
+          )}
+        </div>
+
+        {/* Comments */}
+        {ctx.comments.length > 0 && (
+          <>
+            <div style={{
+              fontSize: 10.5, textTransform: 'uppercase',
+              letterSpacing: '0.08em', color: 'var(--text-faint)',
+              fontWeight: 700, marginBottom: 6,
+            }}>
+              Comments · {ctx.comments.length}
+            </div>
+            {ctx.comments.map((c) => (
+              <CommentBlock
+                key={c.id}
+                comment={c}
+                expanded={expandedComments.has(c.id)}
+                onToggle={() => {
+                  const next = new Set(expandedComments);
+                  if (next.has(c.id)) next.delete(c.id);
+                  else next.add(c.id);
+                  setExpandedComments(next);
+                }}
+                truncateAt={COMMENT_TRUNCATE}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CommentBlock({
+  comment, expanded, onToggle, truncateAt,
+}: {
+  comment: JiraComment;
+  expanded: boolean;
+  onToggle: () => void;
+  truncateAt: number;
+}) {
+  const isLong = comment.body.length > truncateAt;
+  const shown = expanded || !isLong
+    ? comment.body
+    : comment.body.slice(0, truncateAt) + '…';
+  const ago = (() => {
+    const d = new Date(comment.created);
+    if (Number.isNaN(d.getTime())) return '';
+    const secs = (Date.now() - d.getTime()) / 1000;
+    if (secs < 60) return `${Math.round(secs)}s`;
+    if (secs < 3600) return `${Math.round(secs / 60)}m`;
+    if (secs < 86400) return `${Math.round(secs / 3600)}h`;
+    return `${Math.round(secs / 86400)}d`;
+  })();
+  return (
+    <div style={{
+      borderLeft: '2px solid var(--border-2)',
+      paddingLeft: 10, paddingTop: 4, paddingBottom: 6,
+      marginBottom: 10,
+    }}>
+      <div style={{
+        fontSize: 11, color: 'var(--text-dim)', marginBottom: 3,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+      }}>
+        <span><strong style={{ color: 'var(--accent)' }}>{comment.author}</strong></span>
+        <span style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'SF Mono, monospace' }}>{ago}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 12, lineHeight: 1.5, color: 'var(--text)',
+          whiteSpace: 'pre-wrap', cursor: isLong ? 'pointer' : 'default',
+        }}
+        onClick={isLong ? onToggle : undefined}
+        title={isLong ? (expanded ? 'click to collapse' : 'click to expand') : ''}
+      >
+        {shown}
+        {isLong && (
+          <span style={{
+            color: 'var(--accent)', fontSize: 11, marginLeft: 6,
+          }}>
+            {expanded ? '↑' : '↓'}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

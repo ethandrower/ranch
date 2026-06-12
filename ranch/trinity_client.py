@@ -221,6 +221,16 @@ class TrinityJiraClient:
         ticket = _normalize_show(result)
         return ticket, result.get("epic_key")
 
+    def get_ticket_context(self, key: str) -> dict:
+        """Description + comments + status fields, raw-ish JSON. Used by
+        the side panel so the operator can read the ticket without
+        flipping to Jira.
+
+        Trinity's `jira show --comments` includes the comment thread on
+        the same call — one subprocess hop, no extra round-trips.
+        """
+        return _run_trinity(["jira", "show", key, "--comments"])
+
     def enrich_for_scoring(self, ticket: JiraTicket) -> JiraTicket:
         """Re-fetch a search-shape ticket with the full-show payload so
         triage scoring can see description + figma links. Use sparingly
