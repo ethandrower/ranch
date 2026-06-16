@@ -38,10 +38,15 @@ async def subscribe() -> AsyncIterator[str]:
     q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
     _subscribers.add(q)
     try:
+        # Yield the raw JSON payload only. EventSourceResponse (in app.py)
+        # does the `data: ...\n\n` SSE framing — pre-framing it here too
+        # produced a double `data: data: {...}` wire format that failed
+        # JSON.parse in the browser EventSource and silently dropped every
+        # event.
         # Initial hello so the client knows the channel opened.
-        yield f"data: {json.dumps({'type': 'hello', 'ts': time.time()})}\n\n"
+        yield json.dumps({"type": "hello", "ts": time.time()})
         while True:
             msg = await q.get()
-            yield f"data: {json.dumps(msg)}\n\n"
+            yield json.dumps(msg)
     finally:
         _subscribers.discard(q)

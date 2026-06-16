@@ -41,6 +41,10 @@ export interface Ticket {
   stage: Stage;
   summary: string;
   goal: string;
+  /** Agent's full proposal as markdown (Summary / Plan / Acceptance / Risks). */
+  details?: string;
+  /** Structured acceptance checks surfaced for the approve decision. */
+  acceptance?: Array<{ name: string; cmd: string }>;
   done: string[];
   now?: NowBlock;
   attention?: boolean;

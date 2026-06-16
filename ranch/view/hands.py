@@ -213,15 +213,37 @@ def _ticket_view(session: Session, run: Run) -> dict[str, Any]:
         bool(pending_cp) or bool(block) or run.state == "needs_approval" or is_parked
     )
 
+    concise = run.triage_summary or (
+        (run.initial_prompt or "").splitlines()[0][:120] if run.initial_prompt else ""
+    )
     out: dict[str, Any] = {
         "key": run.ticket or f"(run-{run.id})",
         "initiative": run.initiative_key,
         "epic": None,  # not yet captured — Jira parent link is P0+; defer
         "stage": stage,
-        "summary": (run.initial_prompt or "").splitlines()[0][:120] if run.initial_prompt else "",
-        "goal": run.initial_prompt or "",
+        "summary": concise,
+        # `goal` is the concise headline; the agent's full proposal goes in
+        # `details` (rendered as markdown in the panel). This used to be the
+        # entire raw `initial_prompt` (brief + scope bundle), which made the
+        # panel an unreadable wall of escaped text.
+        "goal": concise,
         "done": done_steps,
+        "run_id": run.id,  # always present so approve/reject/stop can target it
     }
+
+    # The agent's structured proposal (markdown) + acceptance criteria, for
+    # the panel to render legibly.
+    if dossier:
+        details = dossier.payload.get("details")
+        if details:
+            out["details"] = details
+        acceptance = dossier.payload.get("acceptance")
+        if acceptance:
+            out["acceptance"] = [
+                {"name": a.get("name", ""), "cmd": a.get("cmd", "")}
+                for a in acceptance
+                if isinstance(a, dict)
+            ]
 
     if just_did:
         out["now"] = {

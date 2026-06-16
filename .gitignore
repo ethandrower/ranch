@@ -12,3 +12,4 @@ phase*.md
 # DEV worktree only — never commit the dev ranch home (SQLite DB, configs,
 # scopes, hands state). See WORKTREE_README.md.
 .ranch-dev/
+dist-web/

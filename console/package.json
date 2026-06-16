@@ -1,32 +1,23 @@
 {
-  "name": "ranch-console-dev",
+  "name": "ranch-console",
   "version": "0.1.0-dev",
   "private": true,
-  "description": "DEV worktree (feat/hands-console-ui) — isolated from the live ranch-console. Different package name → different Electron userData (~/Library/Application Support/ranch-console-dev/).",
-  "main": "dist/main/index.js",
+  "description": "Ranch web console — pure web app (React + Vite) served over HTTP/SSE by the FastAPI sidecar (ranch serve).",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "web": "vite",
+    "web:build": "vite build",
+    "web:preview": "vite preview --port 5174 --strictPort",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "rebuild": "electron-rebuild --types prod,optional --force --only node-pty",
-    "postinstall": "electron-rebuild --types prod,optional --force --only node-pty"
+    "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@iarna/toml": "^2.2.5",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/addon-webgl": "^0.19.0",
-    "@xterm/xterm": "^6.0.0",
-    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.4",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
@@ -34,8 +25,6 @@
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.2.1",
-    "electron-vite": "^2.3.0",
     "eslint": "^9.17.0",
     "eslint-plugin-react": "^7.37.2",
     "eslint-plugin-react-hooks": "^5.1.0",
@@ -46,12 +35,5 @@
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@10.33.2",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild",
-      "node-pty"
-    ]
-  }
+  "packageManager": "pnpm@10.33.2"
 }

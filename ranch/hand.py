@@ -112,6 +112,47 @@ def _pid_alive(pid: int) -> bool:
 
 TERMINAL_RUN_STATES = {"completed", "stopped", "error"}
 
+# A non-terminal run with no activity (no dossier write, no state change) for
+# this long is treated as abandoned — its process is gone. We reap it so a
+# crashed/killed run can't (a) jam the daemon forever via the "in flight —
+# leaving alone" check, or (b) linger as a zombie card in the console.
+# Generous enough not to kill a slow-but-live propose/execute.
+STALE_ACTIVE_WINDOW = timedelta(minutes=30)
+
+
+def _reap_stale_runs(agent: str) -> int:
+    """Mark abandoned non-terminal runs (no activity for STALE_ACTIVE_WINDOW)
+    as errored. Returns the count reaped. Terminal/queued runs are skipped."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - STALE_ACTIVE_WINDOW
+    reaped = 0
+    with db_session() as db:
+        runs = (
+            db.query(Run)
+            .filter(Run.agent == agent)
+            .filter(~Run.state.in_(TERMINAL_RUN_STATES))
+            .filter(Run.state != "queued")
+            .all()
+        )
+        for run in runs:
+            last_row = (
+                db.query(Dossier.created_at)
+                .filter(Dossier.run_id == run.id)
+                .order_by(Dossier.created_at.desc())
+                .first()
+            )
+            last_activity = last_row[0] if last_row else run.started_at
+            if last_activity is None:
+                continue
+            if last_activity.tzinfo is None:
+                last_activity = last_activity.replace(tzinfo=timezone.utc)
+            if last_activity < cutoff:
+                run.state = "error"
+                run.ended_at = now
+                run.exit_reason = "stale — process gone (reaped by hand)"
+                reaped += 1
+    return reaped
+
 
 def _active_run_for(agent: str) -> Optional["Run"]:
     """Return the most-recent non-terminal Run for this agent, excluding
@@ -713,6 +754,13 @@ class RanchHand:
                     console.print(f"[yellow]{self.name}: stop signal received — exiting cleanly.[/yellow]")
                     self._consume_stop_signal()
                     break
+
+                # 0. Reap abandoned runs first, so a crashed/killed run can't
+                #    jam this loop ("in flight — leaving alone") or linger as a
+                #    zombie card.
+                reaped = _reap_stale_runs(self.name)
+                if reaped:
+                    console.print(f"[yellow]{self.name}: reaped {reaped} stale run(s)[/yellow]")
 
                 # 1. Anything already in flight? Don't double-pick.
                 active = _active_run_for(self.name)

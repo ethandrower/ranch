@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import s from './styles.module.css';
 import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
 import {
@@ -42,6 +43,7 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
   const [expandedStep, setExpandedStep] = useState<{ key: string; index: number } | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // ─── Live data wiring (P4) ────────────────────────────────────
   // Fetch hand summaries on mount, then fetch the current hand's full
@@ -59,6 +61,30 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
       setLiveStatus('offline');
     }
   }, [current, useFixture]);
+
+  // Run an operator action, surface any failure, and refetch on success.
+  // Every action used to be fire-and-forget (try/finally, no catch), so a
+  // 409 Conflict or an unreachable sidecar vanished silently and the click
+  // felt like "nothing happened."
+  const runAction = useCallback(
+    async (label: string, fn: () => Promise<unknown>) => {
+      try {
+        setActionError(null);
+        await fn();
+        await refreshCurrentHand();
+      } catch (e) {
+        const status = (e as { status?: number } | null)?.status;
+        setActionError(
+          status === 409
+            ? `${label}: already in progress — no change.`
+            : status
+              ? `${label} failed (HTTP ${status}).`
+              : `${label} failed — is the sidecar running?`,
+        );
+      }
+    },
+    [refreshCurrentHand],
+  );
 
   useEffect(() => {
     if (useFixture) return;
@@ -117,6 +143,16 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
       refreshCurrentHand();
     });
     return cleanup;
+  }, [refreshCurrentHand, useFixture]);
+
+  // Polling fallback — SSE can miss events (queue dropped while full, or a
+  // change made by the separate hand-daemon process that the in-memory bus
+  // never sees). A low-frequency refetch makes the board self-heal so it
+  // never sits stale until a manual reload.
+  useEffect(() => {
+    if (useFixture) return;
+    const t = setInterval(() => { void refreshCurrentHand(); }, 5_000);
+    return () => clearInterval(t);
   }, [refreshCurrentHand, useFixture]);
 
   useEffect(() => {
@@ -179,7 +215,7 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
         }}
         onEpicClick={(e) => setDrilledEpic({ ...drilledEpic, [current]: e })}
         onBlockedJump={(k) => setSelectedKey(k)}
-        onKickoff={async (runId) => { await kickoffRun(runId); await refreshCurrentHand(); }}
+        onKickoff={(runId) => runAction('Kick off', () => kickoffRun(runId))}
       />
       <SidePanel
         ticket={findTicket(hand, selectedKey)}
@@ -190,11 +226,26 @@ export function HandsConsoleApp({ useFixture = false }: Props = {}) {
             prev && prev.key === key && prev.index === index ? null : { key, index }
           );
         }}
-        onApprove={async (runId) => { await approveRun(runId); await refreshCurrentHand(); }}
-        onReject={async (runId, reason) => { await rejectRun(runId, reason); await refreshCurrentHand(); }}
-        onStop={async (runId) => { await stopRun(runId); await refreshCurrentHand(); }}
+        onApprove={(runId) => runAction('Approve', () => approveRun(runId))}
+        onReject={(runId, reason) => runAction('Reject', () => rejectRun(runId, reason))}
+        onStop={(runId) => runAction('Stop', () => stopRun(runId))}
         live={liveStatus === 'live'}
       />
+      {actionError && (
+        <div
+          role="alert"
+          onClick={() => setActionError(null)}
+          style={{
+            position: 'fixed', top: 48, right: 16, zIndex: 50,
+            background: '#3a1e1e', border: '1px solid #b85c5c', color: '#f3d6d6',
+            padding: '10px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+            maxWidth: 380, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          ⚠ {actionError}
+          <span style={{ opacity: 0.6, marginLeft: 8, fontSize: 11 }}>✕</span>
+        </div>
+      )}
       <div className={s.footerHint}>
         {liveStatus === 'live' ? '● live — sidecar connected' :
          liveStatus === 'connecting' ? '○ connecting to sidecar…' :
@@ -523,6 +574,7 @@ function SidePanel({
       </div>
       <div className={`${s.panelBody} ${isExpanded ? s.panelBodyHasExpand : ''}`}>
         <PanelGoal ticket={ticket} />
+        <PanelProposal ticket={ticket} />
         <PanelJiraContext ticket={ticket} />
         <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
         <PanelNow ticket={ticket} />
@@ -536,6 +588,101 @@ function SidePanel({
             index={expandedStep.index}
             onClose={() => onToggleStep(expandedStep.key, expandedStep.index)}
           />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Minimal markdown renderer (no dependency) ─────────────────────
+// Enough to render the agent's proposal (`details`) legibly: headings,
+// **bold**, `code`, and ordered/unordered lists.
+function mdInline(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /(\*\*([^*]+)\*\*|`([^`]+)`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[2] !== undefined) out.push(<strong key={k++}>{m[2]}</strong>);
+    else if (m[3] !== undefined)
+      out.push(
+        <code key={k++} style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 3, fontFamily: 'SF Mono, ui-monospace, monospace', fontSize: 12 }}>{m[3]}</code>,
+      );
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function Markdown({ text }: { text: string }) {
+  const blocks: ReactNode[] = [];
+  let list: string[] = [];
+  let listType: 'ol' | 'ul' | null = null;
+  let key = 0;
+  const flush = () => {
+    if (!list.length) return;
+    const items = list.map((it, i) => (
+      <li key={i} style={{ marginBottom: 3, lineHeight: 1.5 }}>{mdInline(it)}</li>
+    ));
+    blocks.push(
+      listType === 'ol'
+        ? <ol key={`b${key++}`} style={{ margin: '4px 0 10px 20px' }}>{items}</ol>
+        : <ul key={`b${key++}`} style={{ margin: '4px 0 10px 20px' }}>{items}</ul>,
+    );
+    list = [];
+    listType = null;
+  };
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    const ol = /^\s*\d+\.\s+(.*)$/.exec(line);
+    const ul = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      const lvl = h[1].length;
+      blocks.push(
+        <div key={`b${key++}`} style={{ fontWeight: 600, fontSize: lvl <= 2 ? 13.5 : 12.5, textTransform: lvl <= 2 ? 'uppercase' : 'none', letterSpacing: lvl <= 2 ? 0.5 : 0, color: 'var(--text)', margin: '14px 0 5px' }}>{mdInline(h[2])}</div>,
+      );
+    } else if (ol) {
+      if (listType !== 'ol') flush();
+      listType = 'ol';
+      list.push(ol[1]);
+    } else if (ul) {
+      if (listType !== 'ul') flush();
+      listType = 'ul';
+      list.push(ul[1]);
+    } else if (line.trim() === '') {
+      flush();
+    } else {
+      flush();
+      blocks.push(<p key={`b${key++}`} style={{ margin: '5px 0', lineHeight: 1.55 }}>{mdInline(line)}</p>);
+    }
+  }
+  flush();
+  return <div style={{ fontSize: 13 }}>{blocks}</div>;
+}
+
+function PanelProposal({ ticket }: { ticket: Ticket }) {
+  if (!ticket.details) return null;
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>▣</span> PROPOSAL
+      </div>
+      <div className={s.sectionContent}>
+        <Markdown text={ticket.details} />
+        {ticket.acceptance && ticket.acceptance.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-dim)', marginBottom: 6 }}>Acceptance</div>
+            {ticket.acceptance.map((a, i) => (
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 12.5 }}>✓ {a.name}</div>
+                <code style={{ display: 'block', fontSize: 11.5, color: 'var(--text-dim)', fontFamily: 'SF Mono, ui-monospace, monospace', marginTop: 2 }}>{a.cmd}</code>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
