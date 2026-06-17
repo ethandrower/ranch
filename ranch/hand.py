@@ -123,7 +123,7 @@ STALE_ACTIVE_WINDOW = timedelta(minutes=30)
 def _reap_stale_runs(agent: str) -> int:
     """Mark abandoned non-terminal runs (no activity for STALE_ACTIVE_WINDOW)
     as errored. Returns the count reaped. Terminal/queued runs are skipped."""
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()  # naive UTC, like the rest of ranch
     cutoff = now - STALE_ACTIVE_WINDOW
     reaped = 0
     with db_session() as db:
@@ -144,14 +144,28 @@ def _reap_stale_runs(agent: str) -> int:
             last_activity = last_row[0] if last_row else run.started_at
             if last_activity is None:
                 continue
-            if last_activity.tzinfo is None:
-                last_activity = last_activity.replace(tzinfo=timezone.utc)
+            # DB datetimes are naive UTC; drop any tzinfo so the comparison
+            # stays naive like the rest of ranch.
+            if last_activity.tzinfo is not None:
+                last_activity = last_activity.replace(tzinfo=None)
             if last_activity < cutoff:
                 run.state = "error"
                 run.ended_at = now
                 run.exit_reason = "stale — process gone (reaped by hand)"
                 reaped += 1
     return reaped
+
+
+def _mark_run_terminal(run_id: int, state: str = "stopped", reason: str | None = None) -> None:
+    """Force a run into a terminal state — used to retire placeholder/superseded
+    runs so they don't linger as non-terminal zombies that jam the daemon."""
+    with db_session() as db:
+        run = db.get(Run, run_id)
+        if run and run.state not in TERMINAL_RUN_STATES:
+            run.state = state
+            run.ended_at = datetime.utcnow()  # naive UTC, like the rest of ranch
+            if reason:
+                run.exit_reason = reason
 
 
 def _active_run_for(agent: str) -> Optional["Run"]:
@@ -239,6 +253,45 @@ class _RunSnapshot:
 
 def _snapshot_run(run: "Run") -> _RunSnapshot:
     return _RunSnapshot(id=run.id, agent=run.agent, ticket=run.ticket, state=run.state)
+
+
+def _find_rejected_parked_propose(agent: str) -> "tuple[_RunSnapshot, str] | None":
+    """A parked propose the operator sent back with feedback. Finds a terminal
+    run with a parked latest dossier + an unprocessed `reject` interjection,
+    consumes it, retires the run, and returns (run, operator_feedback) so the
+    loop can re-propose addressing it. The 'send back with feedback' refine path."""
+    cutoff = datetime.utcnow() - AWAITING_APPROVAL_WINDOW
+    with db_session() as db:
+        runs = (
+            db.query(Run)
+            .filter(Run.agent == agent)
+            .filter(Run.state.in_(TERMINAL_RUN_STATES))
+            .filter(Run.ended_at >= cutoff)
+            .order_by(Run.ended_at.desc())
+            .all()
+        )
+        for run in runs:
+            latest = (
+                db.query(Dossier)
+                .filter_by(run_id=run.id)
+                .order_by(Dossier.created_at.desc())
+                .first()
+            )
+            if not latest or latest.state != "parked":
+                continue
+            reject_row = (
+                db.query(Interjection)
+                .filter_by(run_id=run.id, kind="reject", processed_at=None)
+                .order_by(Interjection.id)
+                .first()
+            )
+            if not reject_row:
+                continue
+            reject_row.processed_at = datetime.utcnow()
+            run.state = "stopped"
+            run.exit_reason = "sent back by operator for revision"
+            return _snapshot_run(run), (reject_row.content or "")
+    return None
 
 
 def _touch_pr_check_at(run_id: int) -> None:
@@ -427,7 +480,7 @@ class RanchHand:
         ci_poll_interval_seconds: float = 60.0,
         triage_fn: Optional[Callable[[str | None], list[str]]] = None,
         scope_fn: Optional[Callable[[str], None]] = None,
-        propose_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        propose_fn: Optional[Callable[..., Awaitable[None]]] = None,
         execute_fn: Optional[Callable[[_ApprovedPropose], Awaitable[None]]] = None,
         pr_poll_fn: Optional[Callable[[int], "object"]] = None,
         respond_pr_fn: Optional[Callable[[int], Awaitable[None]]] = None,
@@ -696,8 +749,11 @@ class RanchHand:
         orch.run_id = new_run_id  # piggyback on the pre-created run + pre-seeded dossier
         await orch.run()
 
-    async def _default_propose(self, ticket_key: str) -> None:
-        """Run a propose session via H6 against this hand's worktree."""
+    async def _default_propose(self, ticket_key: str, feedback: str | None = None) -> None:
+        """Run a propose session via H6 against this hand's worktree.
+
+        `feedback` (set on the send-back/refine path) is woven into the brief
+        so the revised plan addresses the operator's notes."""
         from .propose import (
             DEFAULT_PROPOSE_BUDGET_SECONDS,
             PROPOSE_ALLOWED_TOOLS,
@@ -708,7 +764,7 @@ class RanchHand:
         from .runner.orchestrator import Orchestrator
 
         scope_md = resolve_scope_markdown(ticket_key)
-        brief = build_propose_brief(ticket_key, scope_md)
+        brief = build_propose_brief(ticket_key, scope_md, feedback=feedback)
         orch = Orchestrator(
             agent=self.name,
             cwd=self.cwd,
@@ -787,6 +843,24 @@ class RanchHand:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
+                # 2b. A parked propose the operator sent back with feedback?
+                #     → re-propose addressing it (the refine loop). Operator
+                #     types feedback in the panel; reject != abandon (that's Stop).
+                rejected = _find_rejected_parked_propose(self.name)
+                if rejected:
+                    rrun, feedback = rejected
+                    console.print(
+                        f"[bold yellow]{self.name}: {rrun.ticket} sent back — "
+                        f"re-proposing with operator feedback[/bold yellow]"
+                    )
+                    try:
+                        self.scope_fn(rrun.ticket)
+                        await self.propose_fn(rrun.ticket, feedback=feedback)
+                    except Exception as e:
+                        console.print(f"[red]{self.name}: re-propose failed for {rrun.ticket} — {e}[/red]")
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
                 # 3. H20: any in-flight PR has new review comments? → respond.
                 pr_unblocked = await self._check_pr_review_unblocks()
                 if pr_unblocked:
@@ -822,14 +896,15 @@ class RanchHand:
                     console.print(f"[bold green]{self.name}: kicking off {ticket} (operator approved)[/bold green]")
                     try:
                         self.scope_fn(ticket)
-                    except Exception as e:
-                        console.print(f"[red]{self.name}: scope failed for {ticket} — {e}[/red]")
-                        await asyncio.sleep(self.poll_seconds)
-                        continue
-                    try:
                         await self.propose_fn(ticket)
                     except Exception as e:
-                        console.print(f"[red]{self.name}: propose failed for {ticket} — {e}[/red]")
+                        console.print(f"[red]{self.name}: kickoff failed for {ticket} — {e}[/red]")
+                    finally:
+                        # The kicked-off candidate is only a placeholder; propose
+                        # creates its own run. Retire the placeholder so it can't
+                        # linger as a non-terminal zombie that jams _active_run_for
+                        # after propose parks.
+                        _mark_run_terminal(kicked.id, "stopped", "superseded by propose run")
                     await asyncio.sleep(self.poll_seconds)
                     continue
 

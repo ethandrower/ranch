@@ -213,9 +213,24 @@ def _ticket_view(session: Session, run: Run) -> dict[str, Any]:
         bool(pending_cp) or bool(block) or run.state == "needs_approval" or is_parked
     )
 
-    concise = run.triage_summary or (
-        (run.initial_prompt or "").splitlines()[0][:120] if run.initial_prompt else ""
-    )
+    concise = run.triage_summary
+    if not concise:
+        # Propose/execute runs created on kickoff don't carry the Jira summary;
+        # reuse the triage_summary captured on any sibling run for this ticket
+        # so the board/header show the real summary, not "Ticket: ECD-XXXX".
+        sib = (
+            session.query(Run.triage_summary)
+            .filter(
+                Run.agent == run.agent,
+                Run.ticket == run.ticket,
+                Run.triage_summary.isnot(None),
+            )
+            .order_by(Run.id.desc())
+            .first()
+        )
+        concise = sib[0] if sib else None
+    if not concise:
+        concise = (run.initial_prompt or "").splitlines()[0][:120] if run.initial_prompt else ""
     out: dict[str, Any] = {
         "key": run.ticket or f"(run-{run.id})",
         "initiative": run.initiative_key,

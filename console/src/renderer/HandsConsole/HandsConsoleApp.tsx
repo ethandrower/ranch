@@ -559,10 +559,15 @@ function SidePanel({
   onStop: (runId: number) => Promise<void>;
   live: boolean;
 }) {
+  const [tab, setTab] = useState<'work' | 'ticket'>('work');
+  const ticketKey = ticket?.key ?? null;
+  // Default back to the decision view whenever a different ticket opens.
+  useEffect(() => { setTab('work'); }, [ticketKey]);
   if (!ticket) {
     return <div className={s.sidePanel} />;
   }
   const isExpanded = expandedStep?.key === ticket.key;
+  const stageLabel = STAGES.find((st) => st.key === ticket.stage)?.label ?? 'Work';
   return (
     <div className={`${s.sidePanel} ${ticket ? s.sidePanelOpen : ''} ${isExpanded ? s.sidePanelWide : ''}`}>
       <div className={s.panelHeader}>
@@ -572,22 +577,43 @@ function SidePanel({
         </div>
         <button className={s.closeBtn} onClick={onClose}>✕</button>
       </div>
+      <div style={{ display: 'flex', gap: 20, padding: '0 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        {([['work', stageLabel], ['ticket', 'Ticket']] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              padding: '10px 0', fontSize: 12, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: 0.5,
+              color: tab === key ? 'var(--text)' : 'var(--text-dim)',
+              borderBottom: tab === key ? '2px solid #5cb8a8' : '2px solid transparent',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className={`${s.panelBody} ${isExpanded ? s.panelBodyHasExpand : ''}`}>
-        <PanelGoal ticket={ticket} />
-        <PanelProposal ticket={ticket} />
-        <PanelJiraContext ticket={ticket} />
-        <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
-        <PanelNow ticket={ticket} />
-        <PanelDecideOrWatching
-          ticket={ticket} live={live}
-          onApprove={onApprove} onReject={onReject} onStop={onStop}
-        />
-        {isExpanded && expandedStep && (
-          <ExpandPane
-            ticket={ticket}
-            index={expandedStep.index}
-            onClose={() => onToggleStep(expandedStep.key, expandedStep.index)}
-          />
+        {tab === 'work' ? (
+          <>
+            <PanelProposal ticket={ticket} />
+            <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
+            <PanelNow ticket={ticket} />
+            <PanelDecideOrWatching
+              ticket={ticket} live={live}
+              onApprove={onApprove} onReject={onReject} onStop={onStop}
+            />
+            {isExpanded && expandedStep && (
+              <ExpandPane
+                ticket={ticket}
+                index={expandedStep.index}
+                onClose={() => onToggleStep(expandedStep.key, expandedStep.index)}
+              />
+            )}
+          </>
+        ) : (
+          <PanelJiraContext ticket={ticket} />
         )}
       </div>
     </div>
@@ -662,6 +688,17 @@ function Markdown({ text }: { text: string }) {
   }
   flush();
   return <div style={{ fontSize: 13 }}>{blocks}</div>;
+}
+
+// Jira descriptions/comments arrive with literal escape sequences (e.g. "\n"
+// as backslash-n) rather than real newlines, so pre-wrap shows raw "\n\n"
+// instead of paragraph breaks. Normalize them for display.
+function unescapeText(s: string): string {
+  return s
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '    ')
+    .replace(/\\"/g, '"');
 }
 
 function PanelProposal({ ticket }: { ticket: Ticket }) {
@@ -740,10 +777,11 @@ function PanelJiraContext({ ticket }: { ticket: Ticket }) {
   if (!ctx) return null;
 
   const DESC_TRUNCATE = 600;
-  const descTooLong = ctx.description.length > DESC_TRUNCATE;
+  const desc = unescapeText(ctx.description || '');
+  const descTooLong = desc.length > DESC_TRUNCATE;
   const descShown = descExpanded || !descTooLong
-    ? ctx.description
-    : ctx.description.slice(0, DESC_TRUNCATE) + '…';
+    ? desc
+    : desc.slice(0, DESC_TRUNCATE) + '…';
 
   const COMMENT_TRUNCATE = 240;
 
@@ -829,10 +867,11 @@ function CommentBlock({
   onToggle: () => void;
   truncateAt: number;
 }) {
-  const isLong = comment.body.length > truncateAt;
+  const body = unescapeText(comment.body || '');
+  const isLong = body.length > truncateAt;
   const shown = expanded || !isLong
-    ? comment.body
-    : comment.body.slice(0, truncateAt) + '…';
+    ? body
+    : body.slice(0, truncateAt) + '…';
   const ago = (() => {
     const d = new Date(comment.created);
     if (Number.isNaN(d.getTime())) return '';
@@ -949,6 +988,8 @@ function Decide({
   onStop: (runId: number) => Promise<void>;
 }) {
   const [pending, setPending] = useState(false);
+  const [sendBackOpen, setSendBackOpen] = useState(false);
+  const [feedback, setFeedback] = useState('');
   const runId = ticket.run_id;
   const canAct = live && runId !== undefined;
 
@@ -997,33 +1038,72 @@ function Decide({
             ))}
           </div>
         )}
-        <div className={s.actions}>
-          <button
-            className={`${s.btn} ${s.btnPrimary}`}
-            disabled={!canAct || pending}
-            onClick={() => guard(() => onApprove(runId!))}
-            title={canAct ? '' : 'Approve disabled — no live run_id (fixture mode or not connected)'}
-          >
-            {pending ? 'Approving…' : 'Approve'}
-          </button>
-          <button
-            className={`${s.btn} ${s.btnDanger}`}
-            disabled={!canAct || pending}
-            onClick={() => {
-              const reason = window.prompt('Reject reason (optional):', '') ?? '';
-              guard(() => onReject(runId!, reason));
-            }}
-          >
-            Reject
-          </button>
-          <button
-            className={`${s.btn} ${s.btnTakeover}`}
-            disabled={!canAct || pending}
-            onClick={() => guard(() => onStop(runId!))}
-          >
-            ◼ Stop run
-          </button>
-        </div>
+        {sendBackOpen ? (
+          <div style={{ marginTop: 4 }}>
+            <textarea
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              autoFocus
+              rows={4}
+              placeholder="What should change? e.g. 'scope smaller — defer bulk-activate', 'wrong approach: extend ClaimVersionSerializer instead', 'add a migration test'. The agent re-plans addressing this."
+              style={{
+                width: '100%', boxSizing: 'border-box', resize: 'vertical',
+                background: 'var(--panel-3, rgba(255,255,255,0.04))',
+                color: 'var(--text)', border: '1px solid rgba(255,255,255,0.14)',
+                borderRadius: 6, padding: '8px 10px', fontSize: 12.5,
+                fontFamily: 'inherit', lineHeight: 1.5,
+              }}
+            />
+            <div className={s.actions} style={{ marginTop: 8 }}>
+              <button
+                className={`${s.btn} ${s.btnPrimary}`}
+                disabled={!canAct || pending || !feedback.trim()}
+                onClick={() => guard(async () => {
+                  await onReject(runId!, feedback.trim());
+                  setSendBackOpen(false);
+                  setFeedback('');
+                })}
+                title={feedback.trim() ? '' : 'Add feedback so the agent knows what to revise'}
+              >
+                {pending ? 'Sending…' : '↩ Send back & re-propose'}
+              </button>
+              <button
+                className={`${s.btn} ${s.btnTakeover}`}
+                disabled={pending}
+                onClick={() => { setSendBackOpen(false); setFeedback(''); }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className={s.actions}>
+            <button
+              className={`${s.btn} ${s.btnPrimary}`}
+              disabled={!canAct || pending}
+              onClick={() => guard(() => onApprove(runId!))}
+              title={canAct ? '' : 'Approve disabled — no live run_id (fixture mode or not connected)'}
+            >
+              {pending ? 'Approving…' : 'Approve'}
+            </button>
+            <button
+              className={`${s.btn} ${s.btnDanger}`}
+              disabled={!canAct || pending}
+              onClick={() => setSendBackOpen(true)}
+              title="Send the plan back with feedback — the agent re-proposes a revised plan"
+            >
+              ↩ Send back
+            </button>
+            <button
+              className={`${s.btn} ${s.btnTakeover}`}
+              disabled={!canAct || pending}
+              onClick={() => guard(() => onStop(runId!))}
+              title="Abandon this run entirely"
+            >
+              ◼ Stop run
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -231,6 +231,42 @@ class TrinityJiraClient:
         """
         return _run_trinity(["jira", "show", key, "--comments"])
 
+    def list_transitions(self, key: str) -> dict:
+        """Available Jira status transitions for an issue. Returns
+        {current_status, transitions:[{id,name,to_status,to_category}]}."""
+        return _run_trinity(["jira", "transitions", key])
+
+    def transition(self, key: str, to_status: str, *, comment: str | None = None) -> str | None:
+        """Move an issue to the named target status (matched case-insensitively
+        against the transition's to_status or name). No-op if already there.
+        Returns the resulting status name, or None if no matching transition is
+        available from the current status."""
+        info = self.list_transitions(key)
+        current = (info.get("current_status") or "").strip()
+        target = to_status.strip().lower()
+        if current.lower() == target:
+            return current  # already there
+        match = next(
+            (t for t in info.get("transitions") or []
+             if (t.get("to_status") or "").strip().lower() == target
+             or (t.get("name") or "").strip().lower() == target),
+            None,
+        )
+        if not match:
+            return None
+        args = ["jira", "transition", key, "--id", str(match["id"])]
+        if comment:
+            args += ["--comment", comment]
+        bin_ = trinity_path()
+        proc = subprocess.run(
+            [bin_, *args], capture_output=True, text=True, timeout=30.0, check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"trinity transition exited {proc.returncode}: {proc.stderr.strip()}"
+            )
+        return match.get("to_status") or to_status
+
     def enrich_for_scoring(self, ticket: JiraTicket) -> JiraTicket:
         """Re-fetch a search-shape ticket with the full-show payload so
         triage scoring can see description + figma links. Use sparingly
