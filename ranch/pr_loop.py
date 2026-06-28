@@ -99,12 +99,32 @@ def poll_pr_for_run(
             _touch_last_check(run_id)
             return PollResult(ok=True, pr_id=None, new_comment_count=0)
         pr_id, pr_url = found
+        ticket_key = None
         with db_session() as db:
+            run_row = db.query(Run).filter_by(id=run_id).one_or_none()
+            ticket_key = run_row.ticket if run_row else None
             db.query(Run).filter_by(id=run_id).update({
                 "pr_id": pr_id,
                 "pr_platform": pr_platform,
                 "pr_url": pr_url,
             })
+        # Jira sync: a PR just opened for this ticket → move it to the review
+        # status so the board reflects "in review" without anyone updating Jira
+        # by hand. "Pending Approval" is the citemed workflow's review status
+        # (operator-configurable mapping). Best-effort — a Jira hiccup must
+        # never break the PR loop.
+        if ticket_key:
+            try:
+                from .jira_backend import resolve_jira_client
+                client, _ = resolve_jira_client()
+                with client:
+                    new_status = client.transition(
+                        ticket_key, "Pending Approval",
+                        comment=f"Ranch: PR opened — {pr_url}" if pr_url else None,
+                    )
+                print(f"[ranch.pr_loop] jira {ticket_key} → {new_status} (PR opened)")
+            except Exception as e:
+                print(f"[ranch.pr_loop] jira transition on PR open failed for {ticket_key}: {e}")
 
     # Fetch + dedupe
     try:

@@ -115,6 +115,61 @@ def create_app() -> FastAPI:
         from ..events import list_events_for_hand
         return list_events_for_hand(name, limit=limit)
 
+    @app.get("/api/tickets/{key}/activity")
+    def get_ticket_activity(key: str, limit: int = 60) -> list[dict]:
+        """Live execute activity feed (the agent's reasoning + tool calls) for a
+        ticket — what's actually happening during code/verify."""
+        from ..events import list_activity_for_ticket
+        return list_activity_for_ticket(key, limit=limit)
+
+    @app.get("/api/tickets/{key}/diff")
+    def get_ticket_diff(key: str) -> dict:
+        """The working diff for a ticket's run, so the operator can review the
+        actual code before approving pre_push. Reads the run's worktree."""
+        import subprocess
+        with db_session() as s:
+            run = (
+                s.query(Run)
+                .filter(Run.ticket == key)
+                .order_by(Run.id.desc())
+                .first()
+            )
+            cwd = run.cwd if run else None
+            branch = run.branch_name if run else None
+        if not cwd:
+            return {"ok": False, "reason": "no run/cwd for ticket"}
+
+        def _git(*args: str) -> str:
+            try:
+                p = subprocess.run(
+                    ["git", "-C", cwd, *args],
+                    capture_output=True, text=True, timeout=20, check=False,
+                )
+                return p.stdout
+            except Exception:
+                return ""
+
+        # Working changes vs HEAD (the code the agent wrote, pre-commit).
+        stat = _git("diff", "--stat")
+        patch = _git("diff")
+        # If nothing unstaged, fall back to the last commit (already committed).
+        if not patch.strip():
+            stat = _git("diff", "--stat", "HEAD~1..HEAD")
+            patch = _git("diff", "HEAD~1..HEAD")
+        untracked = [
+            u for u in _git("ls-files", "--others", "--exclude-standard").splitlines()
+            if u.strip()
+        ]
+        return {
+            "ok": True,
+            "branch": branch,
+            "cwd": cwd,
+            "stat": stat.strip(),
+            "patch": patch[:80000],
+            "truncated": len(patch) > 80000,
+            "untracked": untracked,
+        }
+
     @app.get("/api/hands/{name}/candidates")
     def get_hand_candidates(name: str, project: str | None = None) -> list[dict]:
         """Triage candidates for this hand — Jira tickets routed via

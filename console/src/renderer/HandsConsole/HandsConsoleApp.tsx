@@ -5,9 +5,9 @@ import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
 import {
   approveRun, rejectRun, stopRun, kickoffRun,
   fetchHand, fetchHandSummaries, fetchStepDetails, fetchJiraContext,
-  subscribeToStream,
+  fetchTicketActivity, fetchTicketDiff, subscribeToStream,
 } from './api';
-import type { JiraContext, JiraComment } from './api';
+import type { JiraContext, JiraComment, ActivityEntry, TicketDiff } from './api';
 import type { HandSummary, HandView, Stage, Ticket } from './types';
 
 const STAGES: Array<{ key: Stage; label: string; terminal?: boolean }> = [
@@ -600,6 +600,8 @@ function SidePanel({
             <PanelProposal ticket={ticket} />
             <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
             <PanelNow ticket={ticket} />
+            <PanelDiff ticket={ticket} />
+            <PanelActivity ticket={ticket} />
             <PanelDecideOrWatching
               ticket={ticket} live={live}
               onApprove={onApprove} onReject={onReject} onStop={onStop}
@@ -721,6 +723,100 @@ function PanelProposal({ ticket }: { ticket: Ticket }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PanelDiff({ ticket }: { ticket: Ticket }) {
+  const [diff, setDiff] = useState<TicketDiff | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setOpen(false);
+    fetchTicketDiff(ticket.key)
+      .then((d) => { if (!cancelled) setDiff(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [ticket.key]);
+
+  if (!diff || !diff.ok || !diff.patch) return null;
+  const lines = diff.patch.split('\n');
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>▣</span> CODE REVIEW
+        {diff.branch && (
+          <span style={{ color: 'var(--text-faint)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}> · {diff.branch}</span>
+        )}
+      </div>
+      <div className={s.sectionContent}>
+        {diff.stat && (
+          <pre style={{ fontSize: 11.5, color: 'var(--text-dim)', fontFamily: 'SF Mono, ui-monospace, monospace', margin: '0 0 8px', whiteSpace: 'pre-wrap' }}>{diff.stat}</pre>
+        )}
+        {diff.untracked && diff.untracked.length > 0 && (
+          <div style={{ fontSize: 11.5, color: '#7ee787', marginBottom: 8 }}>+ new files: {diff.untracked.join(', ')}</div>
+        )}
+        <button
+          onClick={() => setOpen(!open)}
+          style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.14)', color: 'var(--text)', borderRadius: 5, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
+        >
+          {open ? '▾ hide diff' : '▸ view full diff'}
+        </button>
+        {open && (
+          <pre style={{ maxHeight: 460, overflow: 'auto', fontSize: 11, lineHeight: 1.45, fontFamily: 'SF Mono, ui-monospace, monospace', background: 'rgba(0,0,0,0.28)', borderRadius: 6, padding: 10, marginTop: 8 }}>
+            {lines.map((ln, i) => {
+              const color =
+                ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
+                : ln.startsWith('-') && !ln.startsWith('---') ? '#ff7b72'
+                : ln.startsWith('@@') ? '#79c0ff'
+                : (ln.startsWith('diff ') || ln.startsWith('index ') || ln.startsWith('+++') || ln.startsWith('---')) ? 'var(--text-faint)'
+                : 'var(--text-dim)';
+              return <div key={i} style={{ color, whiteSpace: 'pre' }}>{ln || ' '}</div>;
+            })}
+            {diff.truncated && <div style={{ color: 'var(--text-faint)' }}>… (diff truncated)</div>}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PanelActivity({ ticket }: { ticket: Ticket }) {
+  const [items, setItems] = useState<ActivityEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchTicketActivity(ticket.key)
+        .then((a) => { if (!cancelled) setItems(a); })
+        .catch(() => {});
+    };
+    load();
+    // Live feed — the agent emits steps as it works, so poll while open.
+    const t = setInterval(load, 3000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [ticket.key]);
+
+  if (items.length === 0) return null;
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>⚡</span> ACTIVITY{' '}
+        <span style={{ color: 'var(--text-faint)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>· live (newest first)</span>
+      </div>
+      <div className={s.sectionContent} style={{ maxHeight: 340, overflowY: 'auto' }}>
+        {items.map((a, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: 12 }}>
+            <span style={{ opacity: 0.75 }}>{a.icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ lineHeight: 1.45 }}>{a.title}</div>
+              {a.detail && (
+                <div style={{ color: 'var(--text-dim)', fontFamily: 'SF Mono, ui-monospace, monospace', fontSize: 11, marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{a.detail}</div>
+              )}
+            </div>
+            <span style={{ color: 'var(--text-faint)', fontSize: 10.5, whiteSpace: 'nowrap' }}>{a.ago}</span>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -76,6 +76,32 @@ export async function fetchJiraContext(ticketKey: string): Promise<JiraContext> 
   return jsonFetch<JiraContext>(`/api/tickets/${encodeURIComponent(ticketKey)}/jira-context`);
 }
 
+export interface ActivityEntry {
+  icon: string;
+  title: string;
+  detail?: string | null;
+  ago: string;
+}
+
+export async function fetchTicketActivity(ticketKey: string): Promise<ActivityEntry[]> {
+  return jsonFetch<ActivityEntry[]>(`/api/tickets/${encodeURIComponent(ticketKey)}/activity`);
+}
+
+export interface TicketDiff {
+  ok: boolean;
+  reason?: string;
+  branch?: string | null;
+  cwd?: string;
+  stat?: string;
+  patch?: string;
+  truncated?: boolean;
+  untracked?: string[];
+}
+
+export async function fetchTicketDiff(ticketKey: string): Promise<TicketDiff> {
+  return jsonFetch<TicketDiff>(`/api/tickets/${encodeURIComponent(ticketKey)}/diff`);
+}
+
 export async function approveRun(runId: number, note = ''): Promise<{ unblocked?: number }> {
   return jsonFetch<{ unblocked?: number }>(`/api/runs/${runId}/approve`, {
     method: 'POST',

@@ -265,9 +265,38 @@ class Orchestrator:
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text:
                     console.print(block.text, end="", highlight=False)
+                    txt = block.text.strip()
+                    if len(txt) >= 12:  # skip trivial fragments
+                        self._emit_activity(txt, icon="💭")
                 elif isinstance(block, ToolUseBlock):
                     console.print(f"\n[dim]→ {block.name}[/dim]")
+                    self._emit_activity(block.name, detail=self._tool_detail(block), icon="→")
         console.file.flush() if hasattr(console, 'file') else None
+
+    @staticmethod
+    def _tool_detail(block) -> str | None:
+        """A short human-readable summary of a tool call's target."""
+        inp = getattr(block, "input", None) or {}
+        for key in ("command", "file_path", "path", "pattern", "query", "url", "description"):
+            v = inp.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()[:240]
+        return None
+
+    def _emit_activity(self, title: str, detail: str | None = None, icon: str = "·") -> None:
+        """Tee an execute step into the event channel so the console can show a
+        live activity feed (the agent's reasoning + tool calls). Best-effort —
+        never let feed emission break the run."""
+        if not self.run_id or not self.agent:
+            return
+        try:
+            from ranch.events import emit_event
+            emit_event(
+                hand_name=self.agent, kind="activity", title=title[:240],
+                detail=detail, ticket=self.ticket, icon=icon,
+            )
+        except Exception:
+            pass
 
     def _capture_session_id(self, msg) -> None:
         if isinstance(msg, SystemMessage) and not self.sdk_session_id:

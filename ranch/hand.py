@@ -29,7 +29,7 @@ from rich.console import Console
 
 from .config import AGENTS, RANCH_HOME, reload_agents
 from .db import db_session
-from .models import Dossier, Interjection, Run
+from .models import Checkpoint, Dossier, Interjection, Run
 
 console = Console()
 
@@ -349,6 +349,20 @@ def _find_approved_parked_propose(agent: str) -> _ApprovedPropose | None:
             )
             if not latest or latest.state != "parked":
                 continue
+            # Only a PLAN-stage parked propose should fire execute here. An
+            # EXECUTE run parked at pre_push is ALSO terminal+parked and can
+            # carry an approve interjection — but approving pre_push means
+            # "push the PR," NOT "run execute again." Matching it here re-fires
+            # execute as a fresh run that restarts at planning (the "approve
+            # pre_push → bounces back to plan" bug). Skip pre_push-parked runs.
+            last_cp = (
+                db.query(Checkpoint)
+                .filter_by(run_id=run.id)
+                .order_by(Checkpoint.id.desc())
+                .first()
+            )
+            if last_cp and last_cp.kind == "pre_push":
+                continue
             approve_row = (
                 db.query(Interjection)
                 .filter_by(run_id=run.id, kind="approve", processed_at=None)
@@ -472,7 +486,7 @@ class RanchHand:
         poll_seconds: float = 30.0,
         idle_log_freq_minutes: float = 30.0,
         jira_project: str | None = None,
-        execute_budget_seconds: float = 600.0,
+        execute_budget_seconds: float = 1800.0,  # real multi-file coding needs room (rate-limit retries eat wall-clock)
         # H20 — PR review polling cadence + response budget
         pr_poll_interval_seconds: float = 120.0,
         pr_response_budget_seconds: float = 600.0,

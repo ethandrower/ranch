@@ -118,6 +118,29 @@ def list_events_for_hand(hand_name: str, limit: int = 50) -> list[dict]:
     ]
 
 
+def list_activity_for_ticket(ticket: str, limit: int = 60) -> list[dict]:
+    """Newest-first execute activity (the agent's reasoning + tool calls) for a
+    ticket — powers the console's live 'what is the agent doing' feed."""
+    with db_session() as session:
+        rows = (
+            session.execute(
+                select(HandEvent)
+                .where(HandEvent.ticket == ticket)
+                .where(HandEvent.kind == "activity")
+                .order_by(HandEvent.created_at.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        for r in rows:
+            session.expunge(r)
+    return [
+        {"icon": r.icon, "title": r.title, "detail": r.detail, "ago": _humanize_ago(r.created_at)}
+        for r in rows
+    ]
+
+
 def _humanize_ago(ts: Optional[datetime]) -> str:
     if ts is None:
         return "?"
