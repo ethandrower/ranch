@@ -75,18 +75,18 @@ function getRanchTmuxConfPath(): string {
     '',
     '# ─── Smart wheel scrollback ──────────────────────────────────────',
     '#',
-    '# Default tmux behavior with `mouse on` passes wheel events to alt-',
-    '# screen apps when they request mouse mode (claude does, for plan-UI',
-    '# clicks). That means wheel scroll dies inside claude — nothing in',
-    '# xterm.js scrollback (tmux owns the screen) and the app does not',
-    '# translate wheel to scroll.',
+    '# Default tmux behavior with `mouse on` passes wheel events to apps',
+    '# that have mouse mode enabled. Claude enables mouse mode (for its',
+    '# plan-UI clicks) but does NOT translate wheel events into scroll,',
+    '# so wheel-up dies inside claude.',
     '#',
-    '# The override below auto-enters tmux copy-mode on wheel-up in any',
-    '# alt-screen pane, so scrolling always works regardless of what the',
-    '# app inside is doing. Trade-off: claude inside a plan UI no longer',
-    '# receives wheel events as clicks (it never used them anyway).',
-    "bind -T root WheelUpPane if-shell -F -t= '#{alternate_on}' 'copy-mode -e' 'send-keys -M'",
-    "bind -T root WheelDownPane if-shell -F -t= '#{alternate_on}' 'send-keys -M' 'send-keys -M'",
+    '# Earlier attempt gated copy-mode on `#{alternate_on}` — but claude',
+    '# does not switch to alt-screen, so the gate was always false and',
+    '# wheel events kept getting forwarded into the void. Fix: always',
+    '# enter copy-mode on wheel-up. Trade-off: TUIs that DO want wheel',
+    '# events (btop etc.) lose them inside ranch panes — acceptable for',
+    '# our use case where the pane is always claude.',
+    "bind -T root WheelUpPane copy-mode -e",
     '',
     '# Three-line scroll per wheel tick inside copy-mode (matches a',
     '# normal terminal feel). Page up/down is bound by default.',
@@ -125,6 +125,17 @@ interface ActiveTerminal {
    * from under a still-mounted Terminal component.
    */
   refCount: number;
+  /**
+   * When we SIGHUP the pty ourselves (refCount→0, force-detach, or
+   * killTmuxSession), the resulting onExit is not an unexpected event
+   * for the renderer — it's the visible side of an operation we just
+   * initiated. Broadcasting it caused the "Session ended" overlay to
+   * stick on top of healthy remounted terminals: detach kills pty A,
+   * the new mount attaches pty B with the same terminalId, then A's
+   * exit lands and matches B's filter. Setting this flag before our
+   * own kill suppresses the broadcast for that one event only.
+   */
+  expectedExit: boolean;
 }
 
 /** Indexed by terminalId (`ranch-<agent>`). */
@@ -218,6 +229,12 @@ export async function attachTerminal(
   //   -f <conf>    server config (mouse on, bigger history, truecolor)
   //   new-session
   //   -A           attach if a session by this name exists, else create
+  //   -D           with -A, behaves like attach-session -d: detach any
+  //                other clients currently on the session before we attach.
+  //                Guards against leaked tmux clients (prior Electron crash,
+  //                manual `tmux -L ranch attach` from a terminal) coexisting
+  //                with the renderer's client — two clients render duplicate
+  //                input echo back through both ptys.
   //   -s <name>    session name
   //   -c <path>    start directory (only used when creating a new session)
   //   COMMAND      runs only when creating; ignored when attaching
@@ -225,6 +242,7 @@ export async function attachTerminal(
     ...tmuxPreamble(),
     'new-session',
     '-A',
+    '-D',
     '-s',
     terminalId,
     '-c',
@@ -254,10 +272,19 @@ export async function attachTerminal(
     pty,
     webContents: opts.webContents,
     refCount: 1,
+    expectedExit: false,
   };
   terminals.set(terminalId, active);
 
   pty.onData((data) => {
+    // Once detachInternal has flagged this record for shutdown, drop any
+    // remaining bytes. The pty doesn't die synchronously on SIGHUP — its
+    // tmux client keeps receiving session echo from the new client and
+    // streaming it back to us for the brief window before it actually
+    // exits. Without this gate, those bytes get forwarded to the renderer
+    // with the same terminalId as the new pty, and xterm.js writes them
+    // alongside the new pty's stream → doubled keystroke echo.
+    if (active.expectedExit) return;
     if (active.webContents.isDestroyed()) return;
     active.webContents.send('terminal:data', { terminalId, data });
   });
@@ -265,9 +292,9 @@ export async function attachTerminal(
   pty.onExit(({ exitCode, signal }) => {
     // Diagnostic — useful when tmux dies for non-obvious reasons.
     console.error(
-      `[ranch.pty] ${terminalId} exited (exitCode=${exitCode}, signal=${signal ?? 'none'})`,
+      `[ranch.pty] ${terminalId} exited (exitCode=${exitCode}, signal=${signal ?? 'none'}, expected=${active.expectedExit})`,
     );
-    if (!active.webContents.isDestroyed()) {
+    if (!active.expectedExit && !active.webContents.isDestroyed()) {
       active.webContents.send('terminal:exit', {
         terminalId,
         exitCode,
@@ -318,6 +345,7 @@ function detachInternal(terminalId: string, force: boolean): void {
     t.refCount -= 1;
     if (t.refCount > 0) return;
   }
+  t.expectedExit = true;
   try {
     // SIGHUP → tmux client detaches cleanly without killing the session.
     t.pty.kill('SIGHUP');

@@ -76,6 +76,12 @@ export function Terminal({
       scrollSensitivity: 1,
       fastScrollSensitivity: 5,
       scrollOnUserInput: true,
+      // tmux has mouse-mode on, so drag events get captured by tmux for
+      // its own selection instead of xterm.js's native HTML selection.
+      // Holding Option (Alt) while dragging bypasses mouse reporting so
+      // the user can highlight + Cmd+C like a normal terminal. Matches
+      // iTerm2/Terminal.app convention.
+      macOptionClickForcesSelection: true,
       theme: {
         background: '#0f1115',
         foreground: '#e6e9ef',
@@ -134,15 +140,21 @@ export function Terminal({
       }
     });
 
-    // 4. Attach. We pass `command: 'claude'` so that if the tmux session
-    //    is being newly created (no existing ranch-<agent>), it launches
-    //    straight into claude. tmux's -A flag ignores the command when
-    //    attaching to an existing session, so this is no-op for re-attach.
+    // 4. Attach. We pass `command: 'claude --continue'` so that if the
+    //    tmux session is being newly created (no existing ranch-<agent>),
+    //    it launches into claude and reattaches the most recent session
+    //    in this worktree — the operator no longer has to re-ask "what
+    //    was I working on?" after a Restart Claude. Claude Code silently
+    //    starts fresh if no prior session exists in this directory, so
+    //    this is safe for first launches too. tmux's -A flag ignores the
+    //    command when attaching to an existing session, so this is a
+    //    no-op for re-attach. See:
+    //    https://code.claude.com/docs/en/sessions
     void (async () => {
       const result = await window.ranch.terminal.attach(agent, {
         cols: initialCols,
         rows: initialRows,
-        command: 'claude',
+        command: 'claude --continue',
       });
       if (disposed) {
         if (result.ok) {
