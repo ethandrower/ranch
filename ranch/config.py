@@ -4,10 +4,12 @@ import os
 import tomllib
 from dataclasses import dataclass
 
-# Paths
+# Paths — RANCH_HOME env var lets dev/test runs target an isolated state
+# directory (e.g. a worktree's .ranch-dev) instead of ~/.ranch. Falls back
+# to ~/.ranch for normal production use.
 HOME = Path.home()
-RANCH_HOME = HOME / ".ranch"
-RANCH_HOME.mkdir(exist_ok=True)
+RANCH_HOME = Path(os.environ.get("RANCH_HOME", str(HOME / ".ranch"))).expanduser()
+RANCH_HOME.mkdir(parents=True, exist_ok=True)
 DB_PATH = RANCH_HOME / "ranch.db"
 CONFIG_FILE = RANCH_HOME / "config.toml"
 LOG_DIR = RANCH_HOME / "logs"

@@ -1,4 +1,6 @@
 """Click CLI for ranch."""
+from typing import Optional
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -1020,35 +1022,56 @@ def scope_cmd(ticket_key, save, as_json, cwd):
 
 
 @cli.command("triage")
-@click.option("--agent", default=None, help="Exclude tickets already in flight for this agent (default: anyone).")
+@click.option("--agent", default=None, help="Route to a specific hand. When set, only tickets labelled `ranch-<agent>` AND assigned to the ranch-hand user are returned.")
 @click.option("--project", default=None, help="Filter to a single Jira project key (e.g. ECD).")
 @click.option("--top", "top_n", default=10, type=int, help="Show only the top N candidates.")
 @click.option("--json", "as_json", is_flag=True, help="Emit raw JSON suitable for scripting (e.g. by the ranch hand scheduler).")
-def triage_cmd(agent, project, top_n, as_json):
-    """Rank assigned Jira tickets by viability (Phase H4)."""
+@click.option("--all", "show_all", is_flag=True, default=False, help="Show every assigned ticket regardless of routing label. Operator-eyeball view; not what the hand scheduler uses.")
+def triage_cmd(agent, project, top_n, as_json, show_all):
+    """Rank candidate Jira tickets for a hand (Phase A v2 routing).
+
+    Per-hand routing query (default when --agent is set):
+
+        assignee = <ranch_hand_account> AND statusCategory != Done
+        AND labels = "ranch-<agent>"
+
+    The `ranch_hand_account` defaults to your own Jira account; override
+    via [jira].hand_account in ~/.ranch/config.toml or the RANCH_HAND_ACCOUNT
+    env var.
+
+    Without --agent (or with --all), shows everything assigned to you —
+    use this to eyeball the inbox before assigning routing labels.
+    """
     import json as _json
-    from .triage import (
-        JiraClient,
-        JiraConfig,
-        JiraConfigError,
-        in_flight_ticket_keys_for_agent,
-        triage,
-    )
+    from .initiatives import route_label_for_hand
+    from .jira_backend import resolve_jira_client
+    from .triage import in_flight_ticket_keys_for_agent, triage
 
     try:
-        cfg = JiraConfig.load()
-    except JiraConfigError as e:
+        client_ctx, hand_account = resolve_jira_client()
+    except Exception as e:
         console.print(f"[red]{e}[/red]")
         raise click.Abort()
 
     in_flight = in_flight_ticket_keys_for_agent(agent)
 
     try:
-        with JiraClient(cfg) as client:
-            tickets = client.list_assigned_to_me(project=project)
+        with client_ctx as client:
+            if agent and not show_all:
+                tickets = client.list_for_hand(
+                    agent,
+                    assignee_account=hand_account,
+                    project=project,
+                )
+            else:
+                tickets = client.list_assigned_to_me(project=project)
     except Exception as e:
         console.print(f"[red]Jira request failed:[/red] {e}")
         raise click.Abort()
+
+    # Note: when reporting empty results below, we still use cfg-style
+    # `hand_account` so the help message can include it.
+    cfg = type("cfg", (), {"hand_account": hand_account})()
 
     ranked = triage(tickets, in_flight)
     top = ranked[:top_n]
@@ -1061,6 +1084,8 @@ def triage_cmd(agent, project, top_n, as_json):
                 "status": t.status,
                 "priority": t.priority,
                 "has_figma_link": t.has_figma_link,
+                "initiative": t.initiative,
+                "labels": t.labels,
                 "score": {
                     "total": s.total,
                     "status": s.status,
@@ -1077,13 +1102,21 @@ def triage_cmd(agent, project, top_n, as_json):
 
     if not top:
         console.print("[yellow]No viable tickets found.[/yellow]")
+        if agent and not show_all:
+            from .initiatives import route_label_for_hand
+            console.print(f"[dim](Routing query: assignee={cfg.hand_account or 'currentUser()'} AND labels=\"{route_label_for_hand(agent)}\" — pass --all to widen.)[/dim]")
         if in_flight:
             console.print(f"[dim]({len(in_flight)} ticket(s) excluded as already in flight: {', '.join(sorted(in_flight))})[/dim]")
         return
 
-    table = Table(title=f"Triage — top {len(top)} of {len(ranked)}", show_header=True)
+    scope_note = ""
+    if agent and not show_all:
+        from .initiatives import route_label_for_hand
+        scope_note = f' — routed to {agent} via labels="{route_label_for_hand(agent)}"'
+    table = Table(title=f"Triage — top {len(top)} of {len(ranked)}{scope_note}", show_header=True)
     table.add_column("Rank", style="dim", width=4)
     table.add_column("Key", style="bold cyan")
+    table.add_column("Init", style="magenta", width=10)
     table.add_column("Status")
     table.add_column("Pri", width=8)
     table.add_column("Figma", justify="center", width=5)
@@ -1094,6 +1127,7 @@ def triage_cmd(agent, project, top_n, as_json):
         table.add_row(
             str(i),
             t.key,
+            t.initiative or "—",
             t.status,
             t.priority or "—",
             "✓" if t.has_figma_link else "—",
@@ -1305,7 +1339,8 @@ def run_cmd(agent, ticket, brief, free, auto_approve):
 @click.option("--brief", required=True, help="Plain-text brief or path to a .md file")
 @click.option("--free", is_flag=True, default=False, help="Skip the plan→push workflow")
 @click.option("--auto-approve", is_flag=True, default=False, help="Auto-approve every checkpoint")
-def dispatch_cmd(agent, ticket, brief, free, auto_approve):
+@click.option("--initiative", default=None, help="Initiative key to stamp on the run (overrides Jira label + hand default).")
+def dispatch_cmd(agent, ticket, brief, free, auto_approve, initiative):
     """Start a run in the background and return immediately.
 
     Creates a Run row, spawns a detached orchestrator subprocess, writes the
@@ -1313,12 +1348,20 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
       ranch approve|reject|note|stop <run_id>
       ranch status <run_id>
       tail -f $(ranch log <run_id>)  (once Plan C lands)
+
+    Initiative resolution (Phase A — board-per-initiative):
+      1. --initiative flag wins if given
+      2. Otherwise, if --ticket points at a Jira issue with a
+         `ranch-initiative:<key>` label, that wins
+      3. Otherwise the hand's default initiative is used
+      4. Otherwise the run is ungrouped (initiative_key=NULL)
     """
     import subprocess
     import sys
     from pathlib import Path
     from .config import reload_agents, LOG_DIR
     from .db import db_session, init_db
+    from .initiatives import resolve_initiative_for_run
     from .models import Run
 
     init_db()
@@ -1329,6 +1372,26 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
 
     brief_text = Path(brief).read_text() if Path(brief).exists() else brief
     a = agents[agent]
+
+    # Resolve the initiative key for this run. If --ticket was given AND
+    # --initiative wasn't, try to fetch the ticket from Jira to read its
+    # label. Failures here are non-fatal — fall through to hand default.
+    ticket_labels: list[str] = []
+    if ticket and not initiative:
+        try:
+            from .triage import JiraClient, JiraConfig
+            cfg = JiraConfig.load()
+            with JiraClient(cfg) as jc:
+                jt, _ = jc.get_ticket(ticket)
+                ticket_labels = jt.labels or []
+        except Exception as e:
+            console.print(f"[dim]Could not fetch Jira labels for {ticket}: {e}[/dim]")
+
+    resolved_initiative = resolve_initiative_for_run(
+        operator_override=initiative,
+        ticket_labels=ticket_labels,
+        hand_name=agent,
+    )
 
     # Create the Run row first so we can give the caller a run_id and hand
     # the ID to the detached child. State stays "queued" until the child
@@ -1343,6 +1406,7 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
             free=int(free),
             auto_approve=int(auto_approve),
             dispatch_mode="background",
+            initiative_key=resolved_initiative,
         )
         db.add(run)
         db.flush()
@@ -1369,6 +1433,8 @@ def dispatch_cmd(agent, ticket, brief, free, auto_approve):
         )
 
     console.print(f"[green]✓[/green] Dispatched run [bold]#{run_id}[/bold] ({agent} / {ticket or 'ad-hoc'})")
+    if resolved_initiative:
+        console.print(f"  Initiative:    [magenta]{resolved_initiative}[/magenta]")
     console.print(f"  PID:  {proc.pid}")
     console.print(f"  Log:  {log_path}")
     console.print(f"  Approve with: [cyan]ranch approve {run_id}[/cyan]")
@@ -1447,6 +1513,33 @@ def approve_cmd(run_id, note):
     _queue_interjection(run_id, "approve", note)
     console.print(f"[green]✓[/green] Approval queued for run #{run_id}")
 
+    # P5: timeline emit
+    from .events import emit_event
+    from .models import Run
+    with db_session() as s:
+        run = s.query(Run).filter_by(id=run_id).one_or_none()
+        hand = run.agent if run else None
+        ticket = run.ticket if run else None
+    if hand:
+        emit_event(
+            hand_name=hand, kind="approval", severity="good",
+            title=f"Approved run #{run_id}" + (f" ({ticket})" if ticket else ""),
+            detail=note or None, ticket=ticket,
+        )
+
+    # P1: cascading unblock — any tickets blocked by THIS run's ticket get
+    # auto-resolved on approval. Cheap and silent if nothing's blocked.
+    from .blocks import resolve_blocks_on_approve
+    n = resolve_blocks_on_approve(run_id)
+    if n:
+        console.print(f"  [dim]↳ unblocked {n} dependent ticket{'s' if n != 1 else ''}[/dim]")
+        if hand:
+            emit_event(
+                hand_name=hand, kind="block_resolved", severity="good",
+                title=f"Unblocked {n} dependent ticket{'s' if n != 1 else ''}",
+                detail=f"via approval of {ticket}" if ticket else None,
+            )
+
 
 @cli.command("reject")
 @click.argument("run_id", type=int)
@@ -1512,6 +1605,112 @@ def runs_cmd(limit, agent):
             r.exit_reason or "—",
         )
     console.print(table)
+
+
+@cli.command("block")
+@click.argument("run_id", type=int)
+@click.option("--blocker", "blocker_ticket", required=True, help="Ticket id of the blocker (e.g. ECD-2073)")
+@click.option("--reason", required=True, help="One-sentence reason for the block")
+def block_cmd(run_id: int, blocker_ticket: str, reason: str) -> None:
+    """Mark a run as blocked by another ticket's decision (operator override).
+
+    Hands will skip the run until the blocker resolves or until you call
+    `ranch unblock <run_id>`.
+    """
+    from .blocks import record_block as _record_block
+    block = _record_block(
+        blocked_run_id=run_id,
+        blocker_ticket=blocker_ticket,
+        reason=reason,
+        source="operator",
+    )
+    console.print(
+        f"[yellow]⛔[/yellow] Run #{run_id} blocked by [cyan]{blocker_ticket}[/cyan] "
+        f"(block #{block.id})"
+    )
+
+
+@cli.command("unblock")
+@click.argument("run_id", type=int)
+def unblock_cmd(run_id: int) -> None:
+    """Clear all unresolved blocks against a run (operator override)."""
+    from .blocks import resolve_blocks_for_run
+    n = resolve_blocks_for_run(run_id)
+    if n == 0:
+        console.print(f"[dim]Run #{run_id} had no open blocks[/dim]")
+    else:
+        console.print(f"[green]✓[/green] Cleared {n} block{'s' if n != 1 else ''} on run #{run_id}")
+
+
+@cli.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Bind address. Localhost-only by default — do not expose externally.")
+@click.option("--port", default=None, type=int,
+              help="Bind port. Defaults to RANCH_API_PORT env or 8421.")
+@click.option("--reload", is_flag=True, help="Auto-reload on code changes (dev only).")
+def serve_cmd(host: str, port: Optional[int], reload: bool) -> None:
+    """Run the HTTP sidecar for the rebuilt console UI.
+
+    Endpoints under /api/*. SSE stream at /api/stream. Spawned by the
+    Electron main process; can also be run standalone for `curl`
+    debugging or external tooling.
+    """
+    import os
+    import uvicorn
+
+    effective_port = port or int(os.environ.get("RANCH_API_PORT", "8421"))
+    console.print(
+        f"[bold cyan]ranch sidecar[/bold cyan] starting on "
+        f"[yellow]http://{host}:{effective_port}[/yellow]"
+    )
+    uvicorn.run(
+        "ranch.api.app:app",
+        host=host,
+        port=effective_port,
+        log_level="info",
+        reload=reload,
+    )
+
+
+@cli.command("view-hand")
+@click.argument("hand_name")
+@click.option("--json", "as_json", is_flag=True, help="Emit raw JSON instead of a rich summary.")
+def view_hand_cmd(hand_name: str, as_json: bool) -> None:
+    """Project a hand's current state into the new console's view-model shape.
+
+    Pure read — does not touch any agent runtime or hold locks. Used both
+    as a debug tool and as the data source the HTTP sidecar will serve
+    in P2 (the JSON shape is the API contract).
+    """
+    import json as _json
+    from .view.hands import build_hand_view
+
+    view = build_hand_view(hand_name)
+
+    if as_json:
+        click.echo(_json.dumps(view, indent=2, default=str))
+        return
+
+    console.print(f"[bold cyan]{view['label']}[/bold cyan]  [dim]{view['status']}[/dim]")
+    console.print(
+        f"initiatives: [yellow]{', '.join(view['initiatives']) or '(none)'}[/yellow]"
+        f"  default=[yellow]{view['default_initiative'] or '(none)'}[/yellow]"
+    )
+    console.print(f"tickets: {len(view['tickets'])}  adhoc: {len(view['adhoc'])}")
+    if view["tickets"]:
+        t = Table(show_header=True, header_style="bold cyan")
+        t.add_column("Key"); t.add_column("Init"); t.add_column("Stage")
+        t.add_column("Attn"); t.add_column("Blocked by"); t.add_column("Summary")
+        for tk in view["tickets"]:
+            t.add_row(
+                tk["key"],
+                tk.get("initiative") or "—",
+                tk["stage"],
+                "⚠" if tk.get("attention") else "",
+                tk.get("blocked_by") or "",
+                (tk.get("summary") or "")[:60],
+            )
+        console.print(t)
 
 
 if __name__ == "__main__":

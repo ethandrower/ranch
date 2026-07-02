@@ -24,10 +24,11 @@ PROPOSE_ALLOWED_TOOLS = [
     "mcp__ranch__log_decision",
 ]
 
-# Default time budget for a propose session. Short enough to keep cost
-# bounded; long enough that a complex epic-scoped plan can land. Tunable
-# via `--budget` on the CLI.
-DEFAULT_PROPOSE_BUDGET_SECONDS = 180.0
+# Default time budget for a propose session. Long enough that a real-codebase
+# plan can land — 180s was fine against an empty/fake worktree but too short to
+# explore actual code (model + grep/read tool latency, plus rate-limit retries
+# that eat wall-clock) before parking a plan. Tunable via `--budget` on the CLI.
+DEFAULT_PROPOSE_BUDGET_SECONDS = 600.0
 
 
 PROPOSE_SYSTEM_PROMPT = """\
@@ -88,12 +89,25 @@ view of the dossier.
 """
 
 
-def build_propose_brief(ticket: str, scope_md: str) -> str:
+def build_propose_brief(ticket: str, scope_md: str, feedback: str | None = None) -> str:
     """Build the initial user message for a propose session.
 
     The scope bundle (from H5) is inlined so the agent doesn't need to
     re-query Jira or browse comments during its bounded session.
+
+    `feedback` is the operator's note when a previous plan was sent back for
+    revision (the refine loop) — surfaced so the agent revises accordingly.
     """
+    feedback_block = ""
+    if feedback and feedback.strip():
+        feedback_block = (
+            "\n────────────── OPERATOR FEEDBACK ──────────────\n"
+            "The operator reviewed your PREVIOUS plan for this ticket and sent\n"
+            "it back for revision with this feedback:\n\n"
+            f"{feedback.strip()}\n\n"
+            "Produce a REVISED plan that directly addresses it.\n"
+            "────────────────────────────────────────────────\n"
+        )
     return textwrap.dedent(f"""\
         Ticket: {ticket}
 
@@ -109,7 +123,7 @@ def build_propose_brief(ticket: str, scope_md: str) -> str:
         ────────────── SCOPE BUNDLE ──────────────
         {scope_md.strip()}
         ──────────────────────────────────────────
-
+        {feedback_block}
         Begin.
     """)
 

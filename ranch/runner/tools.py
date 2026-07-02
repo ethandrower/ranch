@@ -167,6 +167,43 @@ async def log_decision(args: dict) -> dict:
     return {"content": [{"type": "text", "text": "Decision logged."}]}
 
 
+BLOCK_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "blocker_ticket": {
+            "type": "string",
+            "description": "The ticket id (e.g. ECD-2073) whose decision your current ticket depends on.",
+        },
+        "reason": {
+            "type": "string",
+            "description": (
+                "Why this ticket is blocked by the other. One or two sentences. "
+                "Example: 'The migration shape depends on the worker-scaling "
+                "decision pending in ECD-2073's plan_ready review.'"
+            ),
+        },
+    },
+    "required": ["blocker_ticket", "reason"],
+}
+
+
+@tool(
+    "record_block",
+    (
+        "Record that this ticket is blocked by a decision pending in another "
+        "ticket. Call during propose/triage when you spot a cross-ticket "
+        "dependency. The hand will skip this run until the blocker resolves "
+        "(via its own checkpoint approval) or the operator overrides with "
+        "`ranch unblock <run_id>`."
+    ),
+    BLOCK_INPUT_SCHEMA,
+)
+async def record_block(args: dict) -> dict:
+    # Persistence happens via the PostToolUse block hook (runner/blocks.py),
+    # which has access to orchestrator.run_id. Tool body just acknowledges.
+    return {"content": [{"type": "text", "text": f"Block recorded against {args.get('blocker_ticket', '?')}."}]}
+
+
 @tool(
     "record_state",
     "Update your dossier — a structured self-report of where you are right now (plan, what you just did, phase, any blocker). Call this when finalizing a plan, completing a plan step, switching phases, or before parking.",
@@ -277,5 +314,5 @@ async def run_acceptance(args: dict) -> dict:
 ranch_mcp = create_sdk_mcp_server(
     name="ranch",
     version="0.1.0",
-    tools=[record_checkpoint, log_decision, record_state, run_acceptance],
+    tools=[record_checkpoint, log_decision, record_state, run_acceptance, record_block],
 )

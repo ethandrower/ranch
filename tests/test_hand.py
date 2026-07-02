@@ -140,39 +140,96 @@ def test_request_stop_writes_sentinel_when_pid_exists(isolated_hands_dir):
 
 
 @pytest.mark.asyncio
-async def test_hand_picks_top_triage_and_runs_scope_then_propose(tmp_path):
-    """The happy path: no active work → triage returns a key → scope + propose fire."""
-    called: dict[str, list[str]] = {"triage": [], "scope": [], "propose": []}
-    cycles = {"n": 0}
+async def test_hand_discovers_and_queues_without_firing_propose(tmp_path):
+    """Operator-kickoff flow (post-f1ac9e3): the hand's main loop must
+    NOT auto-fire scope+propose on discovered triage candidates. It
+    inserts them as state='queued' Runs for the operator to kick off
+    via the UI.
 
-    def triage_fn(_project):
-        called["triage"].append("called")
-        return ["ECD-100", "ECD-200"]
+    The legacy auto-fire-propose path is gone; this test pins the new
+    discovery-only behavior.
+    """
+    # Inject _discover_and_queue with a stub that records its call AND
+    # creates queued runs the same way the real impl does. The auto-fire
+    # scope/propose fns must NOT get called.
+    called: dict[str, list[str]] = {"discover": [], "scope": [], "propose": []}
+
+    def stub_discover(self_, *, max_queue=10):
+        called["discover"].append("called")
+        # Mirror real impl side-effect: insert queued run rows
+        with db_session() as s:
+            for key, score in [("ECD-100", 60), ("ECD-200", 30)]:
+                s.add(Run(
+                    agent="testhand", ticket=key, state="queued", cwd="/tmp",
+                    initial_prompt=f"summary of {key}",
+                    triage_score=score, triage_summary=f"summary of {key}",
+                    started_at=datetime.now(timezone.utc),
+                ))
+        return 2
 
     def scope_fn(key):
         called["scope"].append(key)
 
     async def propose_fn(key):
         called["propose"].append(key)
-        # Simulate the side effect: a run + parked dossier exist after propose
-        rid = _make_run("testhand", key, state="completed",
-                        ended_at=datetime.now(timezone.utc))
-        _add_dossier(rid, "parked", blocker="Awaiting approval")
 
     hand = RanchHand("testhand", tmp_path, poll_seconds=0.01,
-                      triage_fn=triage_fn, scope_fn=scope_fn, propose_fn=propose_fn)
+                     scope_fn=scope_fn, propose_fn=propose_fn)
+    # Patch the discovery method on this instance
+    import types
+    hand._discover_and_queue = types.MethodType(stub_discover, hand)
 
-    # Stop after one iteration to avoid an infinite loop in tests.
     async def stop_after_first_cycle():
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.05)
         hand.stop_requested = True
 
     init_db()
     await asyncio.gather(hand.run(), stop_after_first_cycle())
 
-    assert called["triage"] == ["called"]
-    assert called["scope"] == ["ECD-100"]  # top of the ranking
+    assert called["discover"] == ["called"]
+    # Critical: scope + propose MUST NOT have been called
+    assert called["scope"] == []
+    assert called["propose"] == []
+    # And the queued candidates should be in the DB
+    with db_session() as s:
+        queued = s.query(Run).filter_by(agent="testhand", state="queued").all()
+        keys = sorted([r.ticket for r in queued])
+    assert keys == ["ECD-100", "ECD-200"]
+
+
+@pytest.mark.asyncio
+async def test_hand_kickoff_interjection_fires_propose(tmp_path):
+    """The flip side: when the operator queues a `kickoff` interjection
+    on a queued Run, the next hand tick fires scope+propose for it."""
+    rid = _make_run("testhand", "ECD-100", state="queued")
+    with db_session() as s:
+        s.add(Interjection(run_id=rid, kind="kickoff", content=""))
+
+    called: dict[str, list[str]] = {"scope": [], "propose": [], "discover": []}
+
+    def scope_fn(key): called["scope"].append(key)
+    async def propose_fn(key): called["propose"].append(key)
+    def stub_discover(self_, **kw):
+        called["discover"].append("called")
+        return 0
+
+    hand = RanchHand("testhand", tmp_path, poll_seconds=0.01,
+                     scope_fn=scope_fn, propose_fn=propose_fn)
+    import types
+    hand._discover_and_queue = types.MethodType(stub_discover, hand)
+
+    async def stop():
+        await asyncio.sleep(0.05)
+        hand.stop_requested = True
+
+    await asyncio.gather(hand.run(), stop())
+
+    assert called["scope"] == ["ECD-100"]
     assert called["propose"] == ["ECD-100"]
+    # Interjection was consumed
+    with db_session() as s:
+        ij = s.query(Interjection).filter_by(run_id=rid, kind="kickoff").one()
+        assert ij.processed_at is not None
 
 
 @pytest.mark.asyncio

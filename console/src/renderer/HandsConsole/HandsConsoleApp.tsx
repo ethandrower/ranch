@@ -1,0 +1,1261 @@
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import type { ReactNode } from 'react';
+import s from './styles.module.css';
+import { FIXTURE_HANDS, FIXTURE_HAND_SUMMARIES } from './fixture';
+import {
+  approveRun, rejectRun, stopRun, kickoffRun,
+  fetchHand, fetchHandSummaries, fetchStepDetails, fetchJiraContext,
+  fetchTicketActivity, fetchTicketDiff, subscribeToStream,
+} from './api';
+import type { JiraContext, JiraComment, ActivityEntry, TicketDiff } from './api';
+import type { HandSummary, HandView, Stage, Ticket } from './types';
+
+const STAGES: Array<{ key: Stage; label: string; terminal?: boolean }> = [
+  { key: 'triage',    label: 'Triage' },
+  { key: 'scope',     label: 'Scope' },
+  { key: 'plan',      label: 'Plan' },
+  { key: 'code',      label: 'Code' },
+  { key: 'verify',    label: 'Verify' },
+  { key: 'pre_push',  label: 'Pre-push' },
+  { key: 'deploy',    label: 'Deploy' },
+  { key: 'pr_open',   label: 'PR open' },
+  { key: 'review',    label: 'Review' },
+  { key: 'merge',     label: 'Merge', terminal: true },
+];
+
+interface Props {
+  /** False or unset → live mode (fetch from sidecar). True → bundled fixture. */
+  useFixture?: boolean;
+}
+
+export function HandsConsoleApp({ useFixture = false }: Props = {}) {
+  const initialSummaries = useFixture ? FIXTURE_HAND_SUMMARIES : [];
+  const initialHands = useFixture ? FIXTURE_HANDS : {};
+  const [summaries, setSummaries] = useState<HandSummary[]>(initialSummaries);
+  const [hands, setHands] = useState<Record<string, HandView>>(initialHands);
+  const [current, setCurrent] = useState<string>(initialSummaries[0]?.name ?? 'max');
+  const [liveStatus, setLiveStatus] = useState<'connecting' | 'live' | 'fixture' | 'offline'>(
+    useFixture ? 'fixture' : 'connecting'
+  );
+  const [currentInitiative, setCurrentInitiative] = useState<Record<string, string>>({});
+  const [drilledEpic, setDrilledEpic] = useState<Record<string, string | null>>({});
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [expandedStep, setExpandedStep] = useState<{ key: string; index: number } | null>(null);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // ─── Live data wiring (P4) ────────────────────────────────────
+  // Fetch hand summaries on mount, then fetch the current hand's full
+  // view-model whenever the active tab changes. On fetch failure we fall
+  // back to the bundled fixture so the UI is never blank.
+
+  const refreshCurrentHand = useCallback(async () => {
+    if (useFixture) return;
+    if (!current) return;
+    try {
+      const view = await fetchHand(current);
+      setHands((h) => ({ ...h, [current]: view }));
+      setLiveStatus('live');
+    } catch {
+      setLiveStatus('offline');
+    }
+  }, [current, useFixture]);
+
+  // Run an operator action, surface any failure, and refetch on success.
+  // Every action used to be fire-and-forget (try/finally, no catch), so a
+  // 409 Conflict or an unreachable sidecar vanished silently and the click
+  // felt like "nothing happened."
+  const runAction = useCallback(
+    async (label: string, fn: () => Promise<unknown>) => {
+      try {
+        setActionError(null);
+        await fn();
+        await refreshCurrentHand();
+      } catch (e) {
+        const status = (e as { status?: number } | null)?.status;
+        setActionError(
+          status === 409
+            ? `${label}: already in progress — no change.`
+            : status
+              ? `${label} failed (HTTP ${status}).`
+              : `${label} failed — is the sidecar running?`,
+        );
+      }
+    },
+    [refreshCurrentHand],
+  );
+
+  useEffect(() => {
+    if (useFixture) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryConnect = async () => {
+      try {
+        const sm = await fetchHandSummaries();
+        if (cancelled) return;
+        if (sm.length === 0) {
+          // Live sidecar reachable but DB has no hands yet. Show "live"
+          // status with no tickets; the kanban renders the empty state.
+          setSummaries([]);
+          setLiveStatus('live');
+          return;
+        }
+        setSummaries(sm);
+        if (sm[0] && (!current || !sm.find((h) => h.name === current))) {
+          setCurrent(sm[0].name);
+        }
+        setLiveStatus('live');
+      } catch {
+        if (cancelled) return;
+        // Sidecar unreachable. Keep showing whatever we last had (fixture
+        // on first failure, the real data if we'd connected before).
+        setLiveStatus((prev) => (prev === 'live' ? 'offline' : 'offline'));
+        if (Object.keys(hands).length === 0) {
+          setSummaries(FIXTURE_HAND_SUMMARIES);
+          setHands(FIXTURE_HANDS);
+        }
+        // Retry every 5s so a sidecar that comes up later catches up.
+        retryTimer = setTimeout(tryConnect, 5_000);
+      }
+    };
+
+    tryConnect();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [useFixture]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    refreshCurrentHand();
+  }, [refreshCurrentHand]);
+
+  // ─── SSE live updates ──────────────────────────────────────────
+  // Re-fetch the current hand on dossier/interjection/block events. We
+  // could selectively patch the local state, but a full refetch is
+  // simpler and the payload is small.
+  useEffect(() => {
+    if (useFixture) return;
+    const cleanup = subscribeToStream((evt) => {
+      if (evt.type === 'hello') return;
+      refreshCurrentHand();
+    });
+    return cleanup;
+  }, [refreshCurrentHand, useFixture]);
+
+  // Polling fallback — SSE can miss events (queue dropped while full, or a
+  // change made by the separate hand-daemon process that the in-memory bus
+  // never sees). A low-frequency refetch makes the board self-heal so it
+  // never sits stale until a manual reload.
+  useEffect(() => {
+    if (useFixture) return;
+    const t = setInterval(() => { void refreshCurrentHand(); }, 5_000);
+    return () => clearInterval(t);
+  }, [refreshCurrentHand, useFixture]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const hand = hands[current];
+  if (!hand) return <div className={s.root}>No hand data.</div>;
+
+  // Initiative scoping is optional. When no initiatives are configured for
+  // the hand, the kanban shows ALL tickets (no filter). Once at least one
+  // HandInitiative exists, we respect the user's pill selection (or the
+  // hand's default).
+  const initiative = hand.initiatives.length === 0
+    ? null
+    : (currentInitiative[current] ?? hand.default_initiative ?? hand.initiatives[0] ?? null);
+  const epic = drilledEpic[current] ?? null;
+
+  const closePanel = () => {
+    setSelectedKey(null);
+    setExpandedStep(null);
+  };
+
+  const switchHand = (name: string) => {
+    setCurrent(name);
+    closePanel();
+  };
+
+  return (
+    <div className={s.root}>
+      <Topbar
+        summaries={summaries}
+        current={current}
+        onSwitch={switchHand}
+        activityOpen={activityOpen}
+        toggleActivity={() => setActivityOpen((v) => !v)}
+        hand={hand}
+        now={now}
+      />
+      <ScopeBar
+        hand={hand}
+        active={initiative}
+        epic={epic}
+        onSwitch={(k) => {
+          setCurrentInitiative({ ...currentInitiative, [current]: k });
+          setDrilledEpic({ ...drilledEpic, [current]: null });
+          closePanel();
+        }}
+        onClearEpic={() => setDrilledEpic({ ...drilledEpic, [current]: null })}
+      />
+      <Kanban
+        hand={hand}
+        initiative={initiative}
+        epic={epic}
+        selectedKey={selectedKey}
+        onCardClick={(key) => {
+          setSelectedKey(key);
+          setExpandedStep(null);
+        }}
+        onEpicClick={(e) => setDrilledEpic({ ...drilledEpic, [current]: e })}
+        onBlockedJump={(k) => setSelectedKey(k)}
+        onKickoff={(runId) => runAction('Kick off', () => kickoffRun(runId))}
+      />
+      <SidePanel
+        ticket={findTicket(hand, selectedKey)}
+        expandedStep={expandedStep}
+        onClose={closePanel}
+        onToggleStep={(key, index) => {
+          setExpandedStep((prev) =>
+            prev && prev.key === key && prev.index === index ? null : { key, index }
+          );
+        }}
+        onApprove={(runId) => runAction('Approve', () => approveRun(runId))}
+        onReject={(runId, reason) => runAction('Reject', () => rejectRun(runId, reason))}
+        onStop={(runId) => runAction('Stop', () => stopRun(runId))}
+        live={liveStatus === 'live'}
+      />
+      {actionError && (
+        <div
+          role="alert"
+          onClick={() => setActionError(null)}
+          style={{
+            position: 'fixed', top: 48, right: 16, zIndex: 50,
+            background: '#3a1e1e', border: '1px solid #b85c5c', color: '#f3d6d6',
+            padding: '10px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+            maxWidth: 380, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          ⚠ {actionError}
+          <span style={{ opacity: 0.6, marginLeft: 8, fontSize: 11 }}>✕</span>
+        </div>
+      )}
+      <div className={s.footerHint}>
+        {liveStatus === 'live' ? '● live — sidecar connected' :
+         liveStatus === 'connecting' ? '○ connecting to sidecar…' :
+         liveStatus === 'offline' ? '◌ sidecar offline — showing bundled fixture' :
+         '◌ fixture mode (no live data)'}
+      </div>
+    </div>
+  );
+}
+
+function findTicket(hand: HandView, key: string | null): Ticket | null {
+  if (!key) return null;
+  return [...hand.tickets, ...hand.adhoc].find((t) => t.key === key) ?? null;
+}
+
+// ─── Topbar ───────────────────────────────────────────────────────
+
+function Topbar({
+  summaries, current, onSwitch, activityOpen, toggleActivity, hand, now,
+}: {
+  summaries: HandSummary[];
+  current: string;
+  onSwitch: (name: string) => void;
+  activityOpen: boolean;
+  toggleActivity: () => void;
+  hand: HandView;
+  now: Date;
+}) {
+  return (
+    <div className={s.topbar}>
+      <div className={s.brand}>
+        <span className={s.brandDot} />
+        Ranch
+      </div>
+      <div className={s.tabs}>
+        {summaries.map((sm) => (
+          <div
+            key={sm.name}
+            className={`${s.tab} ${sm.name === current ? s.tabActive : ''}`}
+            onClick={() => onSwitch(sm.name)}
+          >
+            <span className={`${s.handStatus} ${sm.status === 'idle' ? s.handStatusIdle : ''}`} />
+            <span>{sm.label}</span>
+            <span className={`${s.badge} ${sm.attention_count === 0 ? s.badgeZero : ''}`}>
+              {sm.attention_count}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className={s.topbarRight}>
+        <button className={s.activityTrigger} onClick={toggleActivity}>
+          <span>⟳</span><span>Activity</span>
+        </button>
+        <span className={s.meta}>
+          {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+        <span className={s.meta}>● {summaries.length} hand{summaries.length !== 1 ? 's' : ''}</span>
+        <ActivityPopout open={activityOpen} hand={hand} now={now} />
+      </div>
+    </div>
+  );
+}
+
+// ─── ActivityPopout ──────────────────────────────────────────────
+
+function ActivityPopout({ open, hand, now }: { open: boolean; hand: HandView; now: Date }) {
+  return (
+    <div className={`${s.activityPopout} ${open ? s.activityPopoutOpen : ''}`}>
+      <div className={s.apHeader}>
+        <span>⟳ Activity · {hand.label}</span>
+        <span style={{ textTransform: 'none', letterSpacing: 0 }}>
+          {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </span>
+      </div>
+      <div className={s.apBody}>
+        {hand.events_log.length === 0 ? (
+          <div className={s.apEmpty}>No recent events.</div>
+        ) : (
+          hand.events_log.map((e, i) => (
+            <div key={i} className={s.apEvent}>
+              <span
+                className={`${s.evIcon} ${
+                  e.severity === 'good' ? s.evIconGood : e.severity === 'bad' ? s.evIconBad : ''
+                }`}
+              >
+                {e.icon}
+              </span>
+              <div className={s.evBody}>
+                {e.title}
+                {e.detail && <div className={s.evDetail}>{e.detail}</div>}
+              </div>
+              <span className={s.evAgo}>{e.ago}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── ScopeBar ────────────────────────────────────────────────────
+
+function ScopeBar({
+  hand, active, epic, onSwitch, onClearEpic,
+}: {
+  hand: HandView; active: string | null; epic: string | null;
+  onSwitch: (k: string) => void; onClearEpic: () => void;
+}) {
+  const all = [...hand.tickets, ...hand.adhoc];
+  const stats: Record<string, { count: number; attention: number; blocked: number; merged: number }> = {};
+  hand.initiatives.forEach((k) => (stats[k] = { count: 0, attention: 0, blocked: 0, merged: 0 }));
+  all.forEach((t) => {
+    const key = t.initiative ?? 'misc';
+    if (!stats[key]) stats[key] = { count: 0, attention: 0, blocked: 0, merged: 0 };
+    stats[key].count += 1;
+    if (t.attention) stats[key].attention += 1;
+    if (t.blocked_by) stats[key].blocked += 1;
+    if (t.stage === 'merge') stats[key].merged += 1;
+  });
+
+  const totalBlocked = Object.values(stats).reduce((a, b) => a + b.blocked, 0);
+
+  return (
+    <div className={s.scopeBar}>
+      <span className={s.scopeLabel}>Initiative</span>
+      {hand.initiatives.map((k) => {
+        const stat = stats[k] ?? { count: 0, attention: 0, blocked: 0, merged: 0 };
+        const pct = stat.count === 0 ? 0 : Math.round((stat.merged / stat.count) * 100);
+        return (
+          <button
+            key={k}
+            className={`${s.scopePill} ${active === k ? s.scopePillActive : ''}`}
+            onClick={() => onSwitch(k)}
+            title={`${stat.merged}/${stat.count} merged · ${stat.attention} attention${stat.blocked ? ` · ${stat.blocked} blocked` : ''}`}
+          >
+            <span className={s.pillProgress} style={{ width: `${pct}%` }} />
+            <span className={s.pillLabel}>{hand.initiative_labels[k] ?? k}</span>
+            <span className={s.pillCount}>{stat.count}</span>
+            <span className={s.pillFrac}>{stat.merged}/{stat.count}</span>
+            {stat.attention > 0 && <span className={s.pillWarn}>{stat.attention}⚠</span>}
+          </button>
+        );
+      })}
+      {totalBlocked > 0 && (
+        <span className={s.scopeBlocked} title="Tickets blocked by another ticket's decision">
+          ⛔ {totalBlocked} blocked
+        </span>
+      )}
+      {epic && (
+        <div className={s.breadcrumb}>
+          <span>drilled into</span>
+          <span className={s.crumb}>{epic}</span>
+          <button className={s.crumbClear} onClick={onClearEpic}>clear ✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Kanban ──────────────────────────────────────────────────────
+
+function Kanban({
+  hand, initiative, epic, selectedKey, onCardClick, onEpicClick, onBlockedJump, onKickoff,
+}: {
+  hand: HandView; initiative: string | null; epic: string | null;
+  selectedKey: string | null;
+  onCardClick: (key: string) => void;
+  onEpicClick: (epic: string) => void;
+  onBlockedJump: (key: string) => void;
+  onKickoff: (runId: number) => Promise<void>;
+}) {
+  const all = [...hand.tickets, ...hand.adhoc];
+  const visible = all.filter((t) => {
+    const ti = t.initiative ?? 'misc';
+    if (initiative && ti !== initiative) return false;
+    if (epic && t.epic !== epic) return false;
+    return true;
+  });
+
+  const byStage = useMemo(() => {
+    const map: Record<Stage, Ticket[]> = {
+      triage: [], scope: [], plan: [], code: [], verify: [],
+      pre_push: [], deploy: [], pr_open: [], review: [], merge: [],
+    };
+    visible.forEach((t) => map[t.stage].push(t));
+    return map;
+  }, [visible]);
+
+  return (
+    <div className={s.kanbanWrap}>
+      <div className={s.kanban}>
+        {STAGES.map((stage) => {
+          const items = byStage[stage.key];
+          const attention = items.filter((t) => t.attention).length;
+          return (
+            <div
+              key={stage.key}
+              className={`${s.col} ${stage.terminal ? s.colTerminal : ''} ${attention > 0 ? s.colAttention : ''}`}
+            >
+              <div className={s.colHeader}>
+                <div className={s.colTitle}>{stage.label}</div>
+                <div className={s.colCounts}>
+                  {attention > 0 && <span className={s.colAttn}>{attention}⚠</span>}
+                  <span className={s.colCount}>{items.length}</span>
+                </div>
+              </div>
+              <div className={s.colBody}>
+                {items.length === 0 ? (
+                  <div className={s.empty}>—</div>
+                ) : (
+                  items.map((t) => (
+                    <TicketCard
+                      key={t.key}
+                      ticket={t}
+                      selected={selectedKey === t.key}
+                      onClick={() => onCardClick(t.key)}
+                      onEpicClick={onEpicClick}
+                      onBlockedClick={onBlockedJump}
+                      onKickoff={onKickoff}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TicketCard({
+  ticket, selected, onClick, onEpicClick, onBlockedClick, onKickoff,
+}: {
+  ticket: Ticket; selected: boolean;
+  onClick: () => void;
+  onEpicClick: (e: string) => void;
+  onBlockedClick: (k: string) => void;
+  onKickoff: (runId: number) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const handleKickoff = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!ticket.run_id || pending) return;
+    setPending(true);
+    try { await onKickoff(ticket.run_id); } finally { setPending(false); }
+  };
+  return (
+    <div
+      className={`${s.card} ${ticket.attention ? s.cardAttention : ''} ${selected ? s.cardSelected : ''} ${ticket.blocked_by ? s.cardBlocked : ''}`}
+      onClick={onClick}
+    >
+      <div className={`${s.cardKey} ${ticket.adhoc ? s.cardKeyAdhoc : ''}`}>
+        <span>{ticket.key}</span>
+        {ticket.triage_score !== undefined && (
+          <span className={s.epicChip} title="Triage viability score" style={{ background: 'var(--panel-3)' }}>
+            ★ {ticket.triage_score}
+          </span>
+        )}
+        {ticket.epic && (
+          <span
+            className={s.epicChip}
+            title={`Drill into ${ticket.epic}`}
+            onClick={(e) => { e.stopPropagation(); onEpicClick(ticket.epic!); }}
+          >
+            {ticket.epic}
+          </span>
+        )}
+        {ticket.blocked_by && (
+          <span
+            className={s.blockedChip}
+            title={`Blocked by ${ticket.blocked_by} — ${ticket.blocked_reason ?? 'awaits decision'}`}
+            onClick={(e) => { e.stopPropagation(); onBlockedClick(ticket.blocked_by!); }}
+          >
+            ⛔ {ticket.blocked_by}
+          </span>
+        )}
+        {ticket.attention && <span className={s.attentionGlyph}>⚠</span>}
+      </div>
+      <div className={s.cardSummary}>{ticket.summary}</div>
+      {ticket.hint && <div className={s.cardHint}>{ticket.hint}</div>}
+      {ticket.queued && ticket.run_id !== undefined && (
+        <div style={{ marginTop: 8 }}>
+          <button
+            className={`${s.btn} ${s.btnPrimary}`}
+            style={{ width: '100%', fontSize: 11, padding: '4px 8px' }}
+            disabled={pending}
+            onClick={handleKickoff}
+            title="Tell the hand to fire propose on this ticket"
+          >
+            {pending ? 'kicking off…' : '▶ Kick off'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Side panel ──────────────────────────────────────────────────
+
+function SidePanel({
+  ticket, expandedStep, onClose, onToggleStep,
+  onApprove, onReject, onStop, live,
+}: {
+  ticket: Ticket | null;
+  expandedStep: { key: string; index: number } | null;
+  onClose: () => void;
+  onToggleStep: (key: string, index: number) => void;
+  onApprove: (runId: number) => Promise<void>;
+  onReject: (runId: number, reason: string) => Promise<void>;
+  onStop: (runId: number) => Promise<void>;
+  live: boolean;
+}) {
+  const [tab, setTab] = useState<'work' | 'ticket'>('work');
+  const ticketKey = ticket?.key ?? null;
+  // Default back to the decision view whenever a different ticket opens.
+  useEffect(() => { setTab('work'); }, [ticketKey]);
+  if (!ticket) {
+    return <div className={s.sidePanel} />;
+  }
+  const isExpanded = expandedStep?.key === ticket.key;
+  const stageLabel = STAGES.find((st) => st.key === ticket.stage)?.label ?? 'Work';
+  return (
+    <div className={`${s.sidePanel} ${ticket ? s.sidePanelOpen : ''} ${isExpanded ? s.sidePanelWide : ''}`}>
+      <div className={s.panelHeader}>
+        <div>
+          <span className={s.panelKey}>{ticket.key}</span>
+          <span className={s.panelSummary}>{ticket.summary}</span>
+        </div>
+        <button className={s.closeBtn} onClick={onClose}>✕</button>
+      </div>
+      <div style={{ display: 'flex', gap: 20, padding: '0 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        {([['work', stageLabel], ['ticket', 'Ticket']] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              padding: '10px 0', fontSize: 12, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: 0.5,
+              color: tab === key ? 'var(--text)' : 'var(--text-dim)',
+              borderBottom: tab === key ? '2px solid #5cb8a8' : '2px solid transparent',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className={`${s.panelBody} ${isExpanded ? s.panelBodyHasExpand : ''}`}>
+        {tab === 'work' ? (
+          <>
+            <PanelProposal ticket={ticket} />
+            <PanelDone ticket={ticket} expandedStep={expandedStep} onToggle={onToggleStep} />
+            <PanelNow ticket={ticket} />
+            <PanelDiff ticket={ticket} />
+            <PanelActivity ticket={ticket} />
+            <PanelDecideOrWatching
+              ticket={ticket} live={live}
+              onApprove={onApprove} onReject={onReject} onStop={onStop}
+            />
+            {isExpanded && expandedStep && (
+              <ExpandPane
+                ticket={ticket}
+                index={expandedStep.index}
+                onClose={() => onToggleStep(expandedStep.key, expandedStep.index)}
+              />
+            )}
+          </>
+        ) : (
+          <PanelJiraContext ticket={ticket} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Minimal markdown renderer (no dependency) ─────────────────────
+// Enough to render the agent's proposal (`details`) legibly: headings,
+// **bold**, `code`, and ordered/unordered lists.
+function mdInline(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /(\*\*([^*]+)\*\*|`([^`]+)`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[2] !== undefined) out.push(<strong key={k++}>{m[2]}</strong>);
+    else if (m[3] !== undefined)
+      out.push(
+        <code key={k++} style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 3, fontFamily: 'SF Mono, ui-monospace, monospace', fontSize: 12 }}>{m[3]}</code>,
+      );
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function Markdown({ text }: { text: string }) {
+  const blocks: ReactNode[] = [];
+  let list: string[] = [];
+  let listType: 'ol' | 'ul' | null = null;
+  let key = 0;
+  const flush = () => {
+    if (!list.length) return;
+    const items = list.map((it, i) => (
+      <li key={i} style={{ marginBottom: 3, lineHeight: 1.5 }}>{mdInline(it)}</li>
+    ));
+    blocks.push(
+      listType === 'ol'
+        ? <ol key={`b${key++}`} style={{ margin: '4px 0 10px 20px' }}>{items}</ol>
+        : <ul key={`b${key++}`} style={{ margin: '4px 0 10px 20px' }}>{items}</ul>,
+    );
+    list = [];
+    listType = null;
+  };
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    const ol = /^\s*\d+\.\s+(.*)$/.exec(line);
+    const ul = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      const lvl = h[1].length;
+      blocks.push(
+        <div key={`b${key++}`} style={{ fontWeight: 600, fontSize: lvl <= 2 ? 13.5 : 12.5, textTransform: lvl <= 2 ? 'uppercase' : 'none', letterSpacing: lvl <= 2 ? 0.5 : 0, color: 'var(--text)', margin: '14px 0 5px' }}>{mdInline(h[2])}</div>,
+      );
+    } else if (ol) {
+      if (listType !== 'ol') flush();
+      listType = 'ol';
+      list.push(ol[1]);
+    } else if (ul) {
+      if (listType !== 'ul') flush();
+      listType = 'ul';
+      list.push(ul[1]);
+    } else if (line.trim() === '') {
+      flush();
+    } else {
+      flush();
+      blocks.push(<p key={`b${key++}`} style={{ margin: '5px 0', lineHeight: 1.55 }}>{mdInline(line)}</p>);
+    }
+  }
+  flush();
+  return <div style={{ fontSize: 13 }}>{blocks}</div>;
+}
+
+// Jira descriptions/comments arrive with literal escape sequences (e.g. "\n"
+// as backslash-n) rather than real newlines, so pre-wrap shows raw "\n\n"
+// instead of paragraph breaks. Normalize them for display.
+function unescapeText(s: string): string {
+  return s
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '    ')
+    .replace(/\\"/g, '"');
+}
+
+function PanelProposal({ ticket }: { ticket: Ticket }) {
+  if (!ticket.details) return null;
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>▣</span> PROPOSAL
+      </div>
+      <div className={s.sectionContent}>
+        <Markdown text={ticket.details} />
+        {ticket.acceptance && ticket.acceptance.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 600, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-dim)', marginBottom: 6 }}>Acceptance</div>
+            {ticket.acceptance.map((a, i) => (
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 12.5 }}>✓ {a.name}</div>
+                <code style={{ display: 'block', fontSize: 11.5, color: 'var(--text-dim)', fontFamily: 'SF Mono, ui-monospace, monospace', marginTop: 2 }}>{a.cmd}</code>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PanelDiff({ ticket }: { ticket: Ticket }) {
+  const [diff, setDiff] = useState<TicketDiff | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setOpen(false);
+    fetchTicketDiff(ticket.key)
+      .then((d) => { if (!cancelled) setDiff(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [ticket.key]);
+
+  if (!diff || !diff.ok || !diff.patch) return null;
+  const lines = diff.patch.split('\n');
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>▣</span> CODE REVIEW
+        {diff.branch && (
+          <span style={{ color: 'var(--text-faint)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}> · {diff.branch}</span>
+        )}
+      </div>
+      <div className={s.sectionContent}>
+        {diff.stat && (
+          <pre style={{ fontSize: 11.5, color: 'var(--text-dim)', fontFamily: 'SF Mono, ui-monospace, monospace', margin: '0 0 8px', whiteSpace: 'pre-wrap' }}>{diff.stat}</pre>
+        )}
+        {diff.untracked && diff.untracked.length > 0 && (
+          <div style={{ fontSize: 11.5, color: '#7ee787', marginBottom: 8 }}>+ new files: {diff.untracked.join(', ')}</div>
+        )}
+        <button
+          onClick={() => setOpen(!open)}
+          style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.14)', color: 'var(--text)', borderRadius: 5, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
+        >
+          {open ? '▾ hide diff' : '▸ view full diff'}
+        </button>
+        {open && (
+          <pre style={{ maxHeight: 460, overflow: 'auto', fontSize: 11, lineHeight: 1.45, fontFamily: 'SF Mono, ui-monospace, monospace', background: 'rgba(0,0,0,0.28)', borderRadius: 6, padding: 10, marginTop: 8 }}>
+            {lines.map((ln, i) => {
+              const color =
+                ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
+                : ln.startsWith('-') && !ln.startsWith('---') ? '#ff7b72'
+                : ln.startsWith('@@') ? '#79c0ff'
+                : (ln.startsWith('diff ') || ln.startsWith('index ') || ln.startsWith('+++') || ln.startsWith('---')) ? 'var(--text-faint)'
+                : 'var(--text-dim)';
+              return <div key={i} style={{ color, whiteSpace: 'pre' }}>{ln || ' '}</div>;
+            })}
+            {diff.truncated && <div style={{ color: 'var(--text-faint)' }}>… (diff truncated)</div>}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PanelActivity({ ticket }: { ticket: Ticket }) {
+  const [items, setItems] = useState<ActivityEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchTicketActivity(ticket.key)
+        .then((a) => { if (!cancelled) setItems(a); })
+        .catch(() => {});
+    };
+    load();
+    // Live feed — the agent emits steps as it works, so poll while open.
+    const t = setInterval(load, 3000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [ticket.key]);
+
+  if (items.length === 0) return null;
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>⚡</span> ACTIVITY{' '}
+        <span style={{ color: 'var(--text-faint)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>· live (newest first)</span>
+      </div>
+      <div className={s.sectionContent} style={{ maxHeight: 340, overflowY: 'auto' }}>
+        {items.map((a, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: 12 }}>
+            <span style={{ opacity: 0.75 }}>{a.icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ lineHeight: 1.45 }}>{a.title}</div>
+              {a.detail && (
+                <div style={{ color: 'var(--text-dim)', fontFamily: 'SF Mono, ui-monospace, monospace', fontSize: 11, marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{a.detail}</div>
+              )}
+            </div>
+            <span style={{ color: 'var(--text-faint)', fontSize: 10.5, whiteSpace: 'nowrap' }}>{a.ago}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PanelGoal({ ticket }: { ticket: Ticket }) {
+  return (
+    <div className={`${s.section} ${s.sectionGoal}`}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>1</span> GOAL
+      </div>
+      <div className={s.sectionContent}>{ticket.goal || '(no goal recorded)'}</div>
+    </div>
+  );
+}
+
+function PanelJiraContext({ ticket }: { ticket: Ticket }) {
+  const [ctx, setCtx] = useState<JiraContext | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setCtx(null);
+    setDescExpanded(false);
+    setExpandedComments(new Set());
+    fetchJiraContext(ticket.key)
+      .then((c) => { if (!cancelled) setCtx(c); })
+      .catch((e) => { if (!cancelled) setError(String(e?.message ?? e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [ticket.key]);
+
+  if (loading) {
+    return (
+      <div className={`${s.section}`}>
+        <div className={s.sectionLabel}><span className={s.sectionNum}>★</span> JIRA</div>
+        <div className={s.sectionContent} style={{ color: 'var(--text-faint)' }}>(loading…)</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className={`${s.section}`}>
+        <div className={s.sectionLabel}><span className={s.sectionNum}>★</span> JIRA</div>
+        <div className={s.sectionContent} style={{ color: 'var(--bad)' }}>Could not load: {error}</div>
+      </div>
+    );
+  }
+  if (!ctx) return null;
+
+  const DESC_TRUNCATE = 600;
+  const desc = unescapeText(ctx.description || '');
+  const descTooLong = desc.length > DESC_TRUNCATE;
+  const descShown = descExpanded || !descTooLong
+    ? desc
+    : desc.slice(0, DESC_TRUNCATE) + '…';
+
+  const COMMENT_TRUNCATE = 240;
+
+  return (
+    <div className={s.section}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>★</span> JIRA
+      </div>
+      <div className={s.sectionContent}>
+        {/* Meta row */}
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: 10,
+          fontSize: 11, color: 'var(--text-dim)', marginBottom: 12,
+          fontFamily: 'SF Mono, monospace',
+        }}>
+          {ctx.status && <span>● {ctx.status}</span>}
+          {ctx.priority && <span>· {ctx.priority}</span>}
+          {ctx.type && <span>· {ctx.type}</span>}
+          {ctx.assignee?.name && <span>· {ctx.assignee.name}</span>}
+          {ctx.labels.length > 0 && (
+            <span>· {ctx.labels.map((l) => `#${l}`).join(' ')}</span>
+          )}
+        </div>
+
+        {/* Description with expand */}
+        <div style={{
+          background: 'var(--panel-3)', borderRadius: 4,
+          padding: '10px 12px', fontSize: 12, lineHeight: 1.55,
+          whiteSpace: 'pre-wrap', color: 'var(--text)',
+          marginBottom: 12,
+        }}>
+          {descShown || '(no description)'}
+          {descTooLong && (
+            <button
+              onClick={() => setDescExpanded(!descExpanded)}
+              style={{
+                marginLeft: 6, background: 'transparent', border: 'none',
+                color: 'var(--accent)', cursor: 'pointer', padding: 0,
+                fontSize: 11, fontFamily: 'inherit',
+              }}
+            >
+              {descExpanded ? '↑ collapse' : '↓ expand'}
+            </button>
+          )}
+        </div>
+
+        {/* Comments */}
+        {ctx.comments.length > 0 && (
+          <>
+            <div style={{
+              fontSize: 10.5, textTransform: 'uppercase',
+              letterSpacing: '0.08em', color: 'var(--text-faint)',
+              fontWeight: 700, marginBottom: 6,
+            }}>
+              Comments · {ctx.comments.length}
+            </div>
+            {ctx.comments.map((c) => (
+              <CommentBlock
+                key={c.id}
+                comment={c}
+                expanded={expandedComments.has(c.id)}
+                onToggle={() => {
+                  const next = new Set(expandedComments);
+                  if (next.has(c.id)) next.delete(c.id);
+                  else next.add(c.id);
+                  setExpandedComments(next);
+                }}
+                truncateAt={COMMENT_TRUNCATE}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CommentBlock({
+  comment, expanded, onToggle, truncateAt,
+}: {
+  comment: JiraComment;
+  expanded: boolean;
+  onToggle: () => void;
+  truncateAt: number;
+}) {
+  const body = unescapeText(comment.body || '');
+  const isLong = body.length > truncateAt;
+  const shown = expanded || !isLong
+    ? body
+    : body.slice(0, truncateAt) + '…';
+  const ago = (() => {
+    const d = new Date(comment.created);
+    if (Number.isNaN(d.getTime())) return '';
+    const secs = (Date.now() - d.getTime()) / 1000;
+    if (secs < 60) return `${Math.round(secs)}s`;
+    if (secs < 3600) return `${Math.round(secs / 60)}m`;
+    if (secs < 86400) return `${Math.round(secs / 3600)}h`;
+    return `${Math.round(secs / 86400)}d`;
+  })();
+  return (
+    <div style={{
+      borderLeft: '2px solid var(--border-2)',
+      paddingLeft: 10, paddingTop: 4, paddingBottom: 6,
+      marginBottom: 10,
+    }}>
+      <div style={{
+        fontSize: 11, color: 'var(--text-dim)', marginBottom: 3,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+      }}>
+        <span><strong style={{ color: 'var(--accent)' }}>{comment.author}</strong></span>
+        <span style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'SF Mono, monospace' }}>{ago}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 12, lineHeight: 1.5, color: 'var(--text)',
+          whiteSpace: 'pre-wrap', cursor: isLong ? 'pointer' : 'default',
+        }}
+        onClick={isLong ? onToggle : undefined}
+        title={isLong ? (expanded ? 'click to collapse' : 'click to expand') : ''}
+      >
+        {shown}
+        {isLong && (
+          <span style={{
+            color: 'var(--accent)', fontSize: 11, marginLeft: 6,
+          }}>
+            {expanded ? '↑' : '↓'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PanelDone({
+  ticket, expandedStep, onToggle,
+}: {
+  ticket: Ticket;
+  expandedStep: { key: string; index: number } | null;
+  onToggle: (key: string, index: number) => void;
+}) {
+  if (!ticket.done || ticket.done.length === 0) return null;
+  const activeIdx = expandedStep?.key === ticket.key ? expandedStep.index : -1;
+  return (
+    <div className={`${s.section} ${s.sectionDone}`}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>2</span> DONE
+      </div>
+      <div className={s.sectionContent}>
+        <ul className={s.doneList}>
+          {ticket.done.map((d, i) => (
+            <li
+              key={i}
+              className={`${s.doneItem} ${i === activeIdx ? s.doneItemActive : ''}`}
+              onClick={() => onToggle(ticket.key, i)}
+            >
+              <span className={s.check}>✓</span>
+              <span
+                className={`${s.doneText} ${i >= ticket.done.length - 2 ? s.doneTextRecent : ''} ${i === activeIdx ? s.expandHintOpen : s.expandHint}`}
+              >
+                {d}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function PanelNow({ ticket }: { ticket: Ticket }) {
+  if (!ticket.now) return null;
+  return (
+    <div className={`${s.section} ${s.sectionNow}`}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>2</span> NOW
+      </div>
+      <div className={s.sectionContent}>
+        <div className={s.nowLine}>{ticket.now.line}</div>
+        <div className={s.nowMeta}>{ticket.now.meta}</div>
+      </div>
+    </div>
+  );
+}
+
+function PanelDecideOrWatching({
+  ticket, live, onApprove, onReject, onStop,
+}: {
+  ticket: Ticket; live: boolean;
+  onApprove: (runId: number) => Promise<void>;
+  onReject: (runId: number, reason: string) => Promise<void>;
+  onStop: (runId: number) => Promise<void>;
+}) {
+  if (ticket.attention) return <Decide ticket={ticket} live={live} onApprove={onApprove} onReject={onReject} onStop={onStop} />;
+  if (ticket.next_checkpoint || ticket.next_eta_seconds !== undefined) return <Watching ticket={ticket} />;
+  return null;
+}
+
+function Decide({
+  ticket, live, onApprove, onReject, onStop,
+}: {
+  ticket: Ticket; live: boolean;
+  onApprove: (runId: number) => Promise<void>;
+  onReject: (runId: number, reason: string) => Promise<void>;
+  onStop: (runId: number) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [sendBackOpen, setSendBackOpen] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const runId = ticket.run_id;
+  const canAct = live && runId !== undefined;
+
+  const guard = async (fn: () => Promise<void>) => {
+    if (!canAct || pending) return;
+    setPending(true);
+    try { await fn(); } finally { setPending(false); }
+  };
+
+  return (
+    <div className={`${s.section} ${s.sectionDecide}`}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>3</span> DECIDE
+      </div>
+      <div className={s.sectionContent}>
+        <div className={s.decidePrompt}>
+          <strong>{ticket.checkpoint ?? 'review needed'}</strong> — operator decision required.
+        </div>
+        {ticket.deploy_rec && (
+          <div className={`${s.recommendation} ${ticket.deploy_rec === 'no-deploy' ? s.noDeploy : ''}`}>
+            <span className={s.recLabel}>
+              {ticket.deploy_rec === 'deploy' ? '↓ DEPLOY recommended' :
+               ticket.deploy_rec === 'no-deploy' ? '○ NO DEPLOY needed' : '? NEEDS REVIEW'}
+            </span>
+            {ticket.deploy_reason}
+          </div>
+        )}
+        {ticket.diff && (
+          <div className={s.diffList}>
+            {ticket.diff.map((f, i) => (
+              <div key={i} className={s.diffFile}>
+                <span>{f.file}</span>
+                <span>
+                  <span className={s.ins}>+{f.ins}</span> <span className={s.del}>-{f.del}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {ticket.comments_preview && (
+          <div className={s.diffList}>
+            {ticket.comments_preview.map((c, i) => (
+              <div key={i} className={s.diffFile}>
+                <span><strong style={{ color: 'var(--accent)' }}>{c.author}:</strong> {c.body}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {sendBackOpen ? (
+          <div style={{ marginTop: 4 }}>
+            <textarea
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              autoFocus
+              rows={4}
+              placeholder="What should change? e.g. 'scope smaller — defer bulk-activate', 'wrong approach: extend ClaimVersionSerializer instead', 'add a migration test'. The agent re-plans addressing this."
+              style={{
+                width: '100%', boxSizing: 'border-box', resize: 'vertical',
+                background: 'var(--panel-3, rgba(255,255,255,0.04))',
+                color: 'var(--text)', border: '1px solid rgba(255,255,255,0.14)',
+                borderRadius: 6, padding: '8px 10px', fontSize: 12.5,
+                fontFamily: 'inherit', lineHeight: 1.5,
+              }}
+            />
+            <div className={s.actions} style={{ marginTop: 8 }}>
+              <button
+                className={`${s.btn} ${s.btnPrimary}`}
+                disabled={!canAct || pending || !feedback.trim()}
+                onClick={() => guard(async () => {
+                  await onReject(runId!, feedback.trim());
+                  setSendBackOpen(false);
+                  setFeedback('');
+                })}
+                title={feedback.trim() ? '' : 'Add feedback so the agent knows what to revise'}
+              >
+                {pending ? 'Sending…' : '↩ Send back & re-propose'}
+              </button>
+              <button
+                className={`${s.btn} ${s.btnTakeover}`}
+                disabled={pending}
+                onClick={() => { setSendBackOpen(false); setFeedback(''); }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className={s.actions}>
+            <button
+              className={`${s.btn} ${s.btnPrimary}`}
+              disabled={!canAct || pending}
+              onClick={() => guard(() => onApprove(runId!))}
+              title={canAct ? '' : 'Approve disabled — no live run_id (fixture mode or not connected)'}
+            >
+              {pending ? 'Approving…' : 'Approve'}
+            </button>
+            <button
+              className={`${s.btn} ${s.btnDanger}`}
+              disabled={!canAct || pending}
+              onClick={() => setSendBackOpen(true)}
+              title="Send the plan back with feedback — the agent re-proposes a revised plan"
+            >
+              ↩ Send back
+            </button>
+            <button
+              className={`${s.btn} ${s.btnTakeover}`}
+              disabled={!canAct || pending}
+              onClick={() => guard(() => onStop(runId!))}
+              title="Abandon this run entirely"
+            >
+              ◼ Stop run
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Watching({ ticket }: { ticket: Ticket }) {
+  const eta = ticket.next_eta_seconds == null
+    ? '—'
+    : ticket.next_eta_seconds >= 60
+      ? `~${Math.round(ticket.next_eta_seconds / 60)}m`
+      : `~${ticket.next_eta_seconds}s`;
+  return (
+    <div className={`${s.section} ${s.sectionWatching}`}>
+      <div className={s.sectionLabel}>
+        <span className={s.sectionNum}>3</span> WATCHING FOR
+      </div>
+      <div className={s.sectionContent}>
+        Next checkpoint: <strong>{ticket.next_checkpoint ?? 'pending'}</strong>
+        <div className={s.nowMeta}>est. {eta} away · no operator action right now</div>
+      </div>
+    </div>
+  );
+}
+
+function ExpandPane({
+  ticket, index, onClose,
+}: {
+  ticket: Ticket; index: number; onClose: () => void;
+}) {
+  const stepLabel = ticket.done[index] ?? '(step)';
+  const [details, setDetails] = useState<Record<string, string> | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchStepDetails(ticket.key)
+      .then((d) => { if (!cancelled) setDetails(d); })
+      .catch(() => { if (!cancelled) setDetails({}); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [ticket.key]);
+
+  const fallback = `(no extra notes for this step — the agent's record_state at the moment this step transitioned to done didn't include a details narrative; prompt the agent to populate \`details\` on non-trivial steps to fill this pane.)`;
+  const text = loading
+    ? '(loading…)'
+    : (details?.[stepLabel] && details[stepLabel].trim()) || fallback;
+
+  return (
+    <div className={s.expandPane}>
+      <div className={s.epHeader}>
+        <span>Step {index + 1} · details</span>
+        <button className={s.epClose} onClick={onClose}>collapse ▸</button>
+      </div>
+      <div className={s.epTitle}>{stepLabel}</div>
+      <div className={s.epBody}>{text}</div>
+    </div>
+  );
+}

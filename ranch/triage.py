@@ -48,6 +48,11 @@ class JiraConfig:
     url: str  # e.g. "https://citemed.atlassian.net"
     email: str
     api_token: str  # from RANCH_JIRA_API_TOKEN env var
+    # Phase A v2 — the Jira user whose tickets the ranch hands pick up.
+    # Tickets must be assigned to this account AND carry a `ranch-<hand>`
+    # label to be routed to a specific hand. Defaults to `email` if unset
+    # so single-operator deploys work without extra config.
+    hand_account: str = ""
 
     @classmethod
     def load(cls) -> "JiraConfig":
@@ -77,7 +82,13 @@ class JiraConfig:
         email = str(jira.get("email", "")).strip()
         if not url or not email:
             raise JiraConfigError("[jira] section is missing `url` or `email`.")
-        return cls(url=url, email=email, api_token=token)
+        # hand_account precedence: env > config > fall back to email
+        hand_account = (
+            os.environ.get("RANCH_HAND_ACCOUNT", "").strip()
+            or str(jira.get("hand_account", "")).strip()
+            or email
+        )
+        return cls(url=url, email=email, api_token=token, hand_account=hand_account)
 
 
 class JiraConfigError(RuntimeError):
@@ -108,6 +119,12 @@ class JiraTicket:
     @property
     def age_days(self) -> float:
         return (datetime.now(timezone.utc) - self.created).total_seconds() / 86400
+
+    @property
+    def initiative(self) -> str | None:
+        """The `ranch-initiative:<key>` label value, or None if absent."""
+        from .initiatives import extract_initiative
+        return extract_initiative(self.labels)
 
 
 @dataclass
@@ -314,8 +331,44 @@ class JiraClient:
     _FIELDS = "summary,status,priority,created,updated,description,comment,labels,assignee,parent"
 
     def list_assigned_to_me(self, *, project: str | None = None) -> list[JiraTicket]:
-        """Return all open tickets currently assigned to the authenticated user."""
+        """All open tickets assigned to the authenticated user. Unscoped —
+        used for the operator-eyeball view (`ranch triage --all`), not for
+        per-hand routing."""
         jql_parts = ["assignee = currentUser()", "statusCategory != Done"]
+        if project:
+            jql_parts.append(f"project = {project}")
+        jql = " AND ".join(jql_parts) + " ORDER BY priority DESC, updated DESC"
+        return self._search(jql)
+
+    def list_for_hand(
+        self,
+        hand_name: str,
+        *,
+        assignee_account: str | None = None,
+        project: str | None = None,
+    ) -> list[JiraTicket]:
+        """Per-hand routing query (Phase A v2).
+
+        Returns tickets that meet ALL of:
+        - assigned to `assignee_account` (the ranch-hand user; defaults
+          to `currentUser()` for single-operator dev),
+        - statusCategory != Done,
+        - labels include `ranch-<hand_name>`.
+
+        Operators put a single ticket in front of a specific hand by
+        adding the routing label; the assignee predicate keeps random
+        team tickets out.
+        """
+        from .initiatives import route_label_for_hand
+        route_label = route_label_for_hand(hand_name)
+        assignee_clause = (
+            f'assignee = "{assignee_account}"' if assignee_account else "assignee = currentUser()"
+        )
+        jql_parts = [
+            assignee_clause,
+            "statusCategory != Done",
+            f'labels = "{route_label}"',
+        ]
         if project:
             jql_parts.append(f"project = {project}")
         jql = " AND ".join(jql_parts) + " ORDER BY priority DESC, updated DESC"

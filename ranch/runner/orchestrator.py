@@ -13,6 +13,7 @@ from rich.rule import Rule
 
 from ranch.db import db_session
 from ranch.models import Run, Checkpoint, Dossier, Interjection
+from ranch.runner.blocks import make_block_hook
 from ranch.runner.checkpoints import make_checkpoint_hook, APPROVAL_REQUIRED
 from ranch.runner.dossier import make_dossier_hook
 from ranch.runner.judge_hook import make_judge_hook
@@ -45,6 +46,7 @@ DEFAULT_ALLOWED_TOOLS = [
     "Read", "Write", "Edit", "Bash", "Grep", "Glob",
     "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
     "mcp__ranch__record_state", "mcp__ranch__run_acceptance",
+    "mcp__ranch__record_block",
 ]
 
 
@@ -186,7 +188,12 @@ class Orchestrator:
             append_system_prompt=effective_append,
             mcp_servers={"ranch": ranch_mcp},
             allowed_tools=effective_tools,
-            hooks={"PostToolUse": [make_checkpoint_hook(self), make_dossier_hook(self), make_judge_hook(self)]},
+            hooks={"PostToolUse": [
+                make_checkpoint_hook(self),
+                make_dossier_hook(self),
+                make_judge_hook(self),
+                make_block_hook(self),
+            ]},
             permission_mode="acceptEdits",
         )
 
@@ -258,9 +265,38 @@ class Orchestrator:
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text:
                     console.print(block.text, end="", highlight=False)
+                    txt = block.text.strip()
+                    if len(txt) >= 12:  # skip trivial fragments
+                        self._emit_activity(txt, icon="💭")
                 elif isinstance(block, ToolUseBlock):
                     console.print(f"\n[dim]→ {block.name}[/dim]")
+                    self._emit_activity(block.name, detail=self._tool_detail(block), icon="→")
         console.file.flush() if hasattr(console, 'file') else None
+
+    @staticmethod
+    def _tool_detail(block) -> str | None:
+        """A short human-readable summary of a tool call's target."""
+        inp = getattr(block, "input", None) or {}
+        for key in ("command", "file_path", "path", "pattern", "query", "url", "description"):
+            v = inp.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()[:240]
+        return None
+
+    def _emit_activity(self, title: str, detail: str | None = None, icon: str = "·") -> None:
+        """Tee an execute step into the event channel so the console can show a
+        live activity feed (the agent's reasoning + tool calls). Best-effort —
+        never let feed emission break the run."""
+        if not self.run_id or not self.agent:
+            return
+        try:
+            from ranch.events import emit_event
+            emit_event(
+                hand_name=self.agent, kind="activity", title=title[:240],
+                detail=detail, ticket=self.ticket, icon=icon,
+            )
+        except Exception:
+            pass
 
     def _capture_session_id(self, msg) -> None:
         if isinstance(msg, SystemMessage) and not self.sdk_session_id:
@@ -475,8 +511,12 @@ async def resume_run(run_id: int) -> None:
         allowed_tools=[
             "Read", "Write", "Edit", "Bash", "Grep", "Glob",
             "mcp__ranch__record_checkpoint", "mcp__ranch__log_decision",
+            "mcp__ranch__record_block",
         ],
-        hooks={"PostToolUse": [make_checkpoint_hook(orch), make_dossier_hook(orch), make_judge_hook(orch)]},
+        hooks={"PostToolUse": [
+            make_checkpoint_hook(orch), make_dossier_hook(orch),
+            make_judge_hook(orch), make_block_hook(orch),
+        ]},
         permission_mode="acceptEdits",
         resume=sdk_session_id,
     )

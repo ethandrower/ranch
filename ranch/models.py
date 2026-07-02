@@ -166,6 +166,15 @@ class Run(Base):
     # H9 — per-hand staging deploy state (operator-driven, not auto-fire)
     deploy_url          = Column(String, nullable=True)     # public URL after deploy succeeded
     deployed_at         = Column(DateTime, nullable=True)   # when the deploy + health check completed
+    # Console rebuild P0 — which initiative this run's ticket belongs to.
+    # Denormalized for fast board-per-initiative filtering; source of truth
+    # is the Jira label, captured at triage time. Nullable for legacy runs.
+    initiative_key      = Column(String, ForeignKey("initiatives.key"), nullable=True, index=True)
+    # Operator-kickoff flow: triage queues Runs in state='queued' with the
+    # hand's viability score; the operator picks which to kick off via the
+    # UI. Score is shown on the triage card as ranking signal.
+    triage_score        = Column(Integer, nullable=True)
+    triage_summary      = Column(Text, nullable=True)  # Jira summary, copied at queue time
 
     checkpoints    = relationship("Checkpoint",    back_populates="run", lazy="dynamic")
     interjections  = relationship("Interjection",  back_populates="run", lazy="dynamic")
@@ -262,3 +271,86 @@ class Dossier(Base):
     state        = Column(String, index=True)         # denormalized for "show parked runs" filtering
     payload_json = Column(Text)                       # full RecordStateInput as JSON
     created_at   = Column(DateTime, default=utcnow, index=True)
+
+
+# ─── Initiatives + blocks (Phase H console-rebuild P0) ────────────────
+
+
+class Initiative(Base):
+    """A coarse-grained scope a hand watches (e.g. "ref-mgmt", "scrapers").
+
+    Tickets carry an `initiative_key` and the UI's board-per-initiative model
+    filters by it. Source of truth: Jira label `ranch-initiative:<key>` on the
+    ticket; CLI override allowed for operator overrides at triage time.
+    """
+    __tablename__ = "initiatives"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    key         = Column(String, unique=True, index=True)   # "ref-mgmt"
+    label       = Column(String)                            # "Reference Management"
+    description = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=utcnow)
+
+
+class HandInitiative(Base):
+    """Which initiatives a given hand watches, with a designated default.
+
+    Composite-PK via (hand_name, initiative_key). One row per (hand, init)
+    pair. Exactly one row per hand should have is_default=1; enforced at
+    write time, not by the schema.
+    """
+    __tablename__ = "hand_initiatives"
+
+    hand_name       = Column(String, primary_key=True, index=True)
+    initiative_key  = Column(String, ForeignKey("initiatives.key"), primary_key=True)
+    is_default      = Column(Integer, default=0)   # bool
+    sort_order      = Column(Integer, default=0)   # display order in the scope-bar
+
+
+class Block(Base):
+    """A "ticket B is blocked by ticket A's decision" relationship.
+
+    Lives as its own table because it's a graph edge, not a self-report —
+    multiple agents/operators may emit blocks against the same run, and we
+    need cheap "show all blocks resolved by this checkpoint" queries.
+
+    `resolved_at` non-null = the block has lifted (e.g. blocker's
+    plan_ready was approved). Hands skip runs that have any unresolved
+    blocks pointing at them.
+    """
+    __tablename__ = "blocks"
+
+    id                          = Column(Integer, primary_key=True, autoincrement=True)
+    blocked_run_id              = Column(Integer, ForeignKey("runs.id"), index=True)
+    blocker_run_id              = Column(Integer, ForeignKey("runs.id"), nullable=True, index=True)
+    blocker_ticket              = Column(String, nullable=True)   # captured even if blocker Run row doesn't exist yet
+    reason                      = Column(Text)
+    created_at                  = Column(DateTime, default=utcnow, index=True)
+    resolved_at                 = Column(DateTime, nullable=True, index=True)
+    resolved_by_checkpoint_id   = Column(Integer, ForeignKey("checkpoints.id"), nullable=True)
+    # Source: "agent" (via record_block MCP tool) or "operator" (via `ranch block` CLI).
+    source                      = Column(String, default="agent")
+
+
+class HandEvent(Base):
+    """A single timeline entry per hand — what changed and when.
+
+    Populated by the hand orchestrator on state transitions, CI flips,
+    review-comment fetches, triage decisions, deploys, and block
+    create/resolve. Consumed by the console's Activity popout +
+    per-hand events log.
+
+    Append-only — never updated, never deleted. Old rows can be pruned
+    by age, but we don't write that yet.
+    """
+    __tablename__ = "hand_events"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    hand_name   = Column(String, index=True)
+    ticket      = Column(String, nullable=True)
+    kind        = Column(String, index=True)   # e.g. "state_transition", "ci_flip", "review_comment", "block_created"
+    severity    = Column(String, default="info")  # good | bad | warn | info
+    icon        = Column(String, default="·")
+    title       = Column(String)
+    detail      = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=utcnow, index=True)
