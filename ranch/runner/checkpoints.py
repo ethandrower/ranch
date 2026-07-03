@@ -17,6 +17,20 @@ CHECKPOINT_TOOL = "mcp__ranch__record_checkpoint"
 APPROVAL_REQUIRED = {"plan_ready", "pre_push", "triage"}
 
 
+def paused_context(kind: str) -> str:
+    """Agent-facing instruction returned when a one-shot run pauses at a gate.
+
+    The session is about to wind down; this tells the agent NOT to take the
+    gated action (e.g. the push) before it exits. The Foreman resumes the
+    session with the operator's decision, at which point the agent proceeds.
+    """
+    return (
+        f"PAUSED at `{kind}` for operator review. Do NOT proceed past this gate "
+        f"or take any further action — this session will now exit and be resumed "
+        f"once the operator approves. Stop here."
+    )
+
+
 def make_checkpoint_hook(orchestrator) -> HookMatcher:
     """Return a HookMatcher that fires on record_checkpoint tool calls."""
 
@@ -43,6 +57,18 @@ def make_checkpoint_hook(orchestrator) -> HookMatcher:
 
         if cp.kind not in APPROVAL_REQUIRED:
             return {}
+
+        # One-shot: on_checkpoint signalled a clean stop. Return the "paused —
+        # do not proceed" instruction and let the session wind down. No decision
+        # is recorded here; the Foreman records it when it resumes the run.
+        # (`is True` guards against MagicMock auto-attrs in hook unit tests.)
+        if getattr(orchestrator, "_paused_at_gate", False) is True:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": paused_context(cp.kind),
+                }
+            }
 
         # Block here until a decision arrives (auto-approve fires immediately
         # from on_checkpoint; interactive mode waits for !approve / !reject).

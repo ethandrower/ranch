@@ -472,3 +472,77 @@ async def test_auto_approve_hook_returns_typed_decision_immediately():
     assert "HUMAN DECISION" in ctx
     assert "APPROVED" in ctx
     assert "pre_push" in ctx
+
+
+# ─── one-shot mode (de-block) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_on_checkpoint_one_shot_pauses_instead_of_waiting():
+    """In one_shot mode, a non-auto gate signals a clean stop — no blocking wait."""
+    run_id = _make_run(ticket="TEST-OS1")
+    orch = Orchestrator("max", Path("/tmp"), "TEST-OS1", "brief", one_shot=True)
+    orch.run_id = run_id
+
+    await orch.on_checkpoint("pre_push", "Ready to push", None)
+
+    assert orch._paused_at_gate is True
+    assert orch.stop_requested is True
+    assert not orch._approval_ready.is_set()  # did NOT arm an in-session wait
+
+
+@pytest.mark.asyncio
+async def test_one_shot_hook_returns_paused_context_without_decision():
+    """The checkpoint hook returns a 'paused — do not proceed' instruction and
+    records NO decision when the run is one-shot (the Foreman decides on resume)."""
+    from ranch.runner.checkpoints import make_checkpoint_hook, CHECKPOINT_TOOL
+
+    run_id = _make_run(ticket="TEST-OS2")
+    orch = Orchestrator("max", Path("/tmp"), "TEST-OS2", "brief", one_shot=True)
+    orch.run_id = run_id
+    hook_fn = make_checkpoint_hook(orch).hooks[0]
+
+    result = await hook_fn(
+        {"tool_name": CHECKPOINT_TOOL, "tool_input": {"kind": "pre_push", "summary": "Ready"}},
+        "tid",
+        MagicMock(),
+    )
+
+    ctx = result["hookSpecificOutput"]["additionalContext"]
+    assert "PAUSED" in ctx
+    assert "do not proceed" in ctx.lower()
+    assert orch._paused_at_gate is True
+    with db_session() as db:
+        cp = db.query(Checkpoint).filter_by(run_id=run_id).one()
+        assert cp.decision is None  # no decision recorded at pause time
+
+
+@pytest.mark.asyncio
+async def test_finalize_paused_at_gate_keeps_run_resumable():
+    """A one-shot pause finalizes as `paused_at_gate` with state `needs_approval`."""
+    run_id = _make_run(ticket="TEST-OS3")
+    orch = Orchestrator("max", Path("/tmp"), "TEST-OS3", "brief", one_shot=True)
+    orch.run_id = run_id
+    orch._paused_at_gate = True
+    orch.stop_requested = True
+
+    await orch._finalize()
+
+    with db_session() as db:
+        run = db.query(Run).filter_by(id=run_id).one()
+        assert run.exit_reason == "paused_at_gate"
+        assert run.state == "needs_approval"  # resumable, not terminal
+
+
+@pytest.mark.asyncio
+async def test_one_shot_off_by_default_still_waits():
+    """Default (one_shot=False) preserves the legacy in-session blocking gate."""
+    run_id = _make_run(ticket="TEST-OS4")
+    orch = Orchestrator("max", Path("/tmp"), "TEST-OS4", "brief")  # one_shot defaults off
+    orch.run_id = run_id
+
+    await orch.on_checkpoint("pre_push", "Ready", None)
+
+    assert orch._paused_at_gate is False
+    assert orch.stop_requested is False
+    assert orch._awaiting_approval is True

@@ -64,6 +64,7 @@ class Orchestrator:
         budget_seconds: float | None = None,
         append_system_prompt_override: str | None = None,
         auto_approve_kinds: set[str] | None = None,
+        one_shot: bool = False,
     ):
         self.agent = agent
         self.cwd = cwd
@@ -76,6 +77,11 @@ class Orchestrator:
         # auto-approve plan_ready (already vetted at propose) while leaving
         # pre_push as a real human gate.
         self.auto_approve_kinds = auto_approve_kinds
+        # One-shot mode: at a non-auto human gate, the session records its
+        # checkpoint and EXITS cleanly (resumable) instead of blocking the tool
+        # call. The Foreman resumes it via resume_run() once the operator
+        # decides. Default off preserves the legacy in-session blocking path.
+        self.one_shot = one_shot
         self.allowed_tools_override = allowed_tools_override
         self.budget_seconds = budget_seconds
         self.append_system_prompt_override = append_system_prompt_override
@@ -87,6 +93,9 @@ class Orchestrator:
         self._approval_ready = asyncio.Event()
         self._approval_result: str | None = None
         self._last_checkpoint_kind: str | None = None
+        # Set when a one-shot run pauses at a human gate — drives the resumable
+        # `paused_at_gate` exit reason in _finalize (vs. a terminal `stopped`).
+        self._paused_at_gate = False
 
         self.stop_requested = False
 
@@ -118,6 +127,18 @@ class Orchestrator:
                 console.print(f"[dim](auto-approve fired for {kind})[/dim]")
                 self._approval_result = "approved"
                 self._approval_ready.set()
+            elif self.one_shot:
+                # One-shot: don't block in-session. Signal a clean stop so the
+                # run exits at the gate (resumable); the Foreman resumes it once
+                # the operator decides. The checkpoint hook returns a "paused —
+                # do not proceed" instruction so the agent doesn't take the
+                # gated action before the session winds down.
+                console.print(
+                    f"[dim](one-shot) paused at gate {kind} — exiting for operator "
+                    f"review; resumable via `ranch resume`.[/dim]"
+                )
+                self._paused_at_gate = True
+                self.stop_requested = True
             else:
                 console.print(f"[dim]Waiting for: !approve  |  !reject <reason>  |  !stop  (gate: {kind})[/dim]")
 
@@ -432,8 +453,14 @@ class Orchestrator:
     # ─── Finalize ────────────────────────────────────────────────────
 
     async def _finalize(self, error: str | None = None) -> None:
-        exit_reason = "error" if error else ("stopped" if self.stop_requested else "completed")
-        final_state = exit_reason  # maps 1:1 for terminal states
+        if self._paused_at_gate and not error:
+            # One-shot pause at a human gate — NOT terminal. Keep the run in
+            # `needs_approval` so the Foreman can resume it on decision.
+            exit_reason = "paused_at_gate"
+            final_state = "needs_approval"
+        else:
+            exit_reason = "error" if error else ("stopped" if self.stop_requested else "completed")
+            final_state = exit_reason  # maps 1:1 for terminal states
 
         # Capture the branch the agent pushed on so poll-pr can discover the
         # PR later via `bb/gh pr list --head <branch>`. Best-effort — missing
@@ -471,8 +498,17 @@ class Orchestrator:
 
 # ─── Resume support ──────────────────────────────────────────────────
 
-async def resume_run(run_id: int) -> None:
-    """Resume a paused or stopped run using its stored SDK session ID."""
+_HD_KINDS = {"plan_ready", "tests_green", "pre_push", "custom"}
+
+
+async def resume_run(run_id: int, *, decision: str = "approved", reason: str | None = None) -> None:
+    """Resume a run paused at a gate, injecting the operator's decision.
+
+    The one-shot session exited at its gate; on resume we deliver the decision
+    (approved/rejected) as the first message so the agent proceeds past the gate
+    (or revises, on rejection). The resumed session stays one-shot, so a later
+    gate pauses it again.
+    """
     with db_session() as db:
         run = db.query(Run).filter_by(id=run_id).one_or_none()
         if not run:
@@ -482,13 +518,15 @@ async def resume_run(run_id: int) -> None:
             console.print(f"[red]Run #{run_id} has no SDK session ID — cannot resume.[/red]")
             return
 
-        # Show most recent undecided checkpoint for context
+        # Most recent undecided checkpoint — the gate we're resuming from.
         last_cp = (
             db.query(Checkpoint)
             .filter_by(run_id=run_id, decision=None)
             .order_by(Checkpoint.id.desc())
             .first()
         )
+        last_cp_kind = last_cp.kind if last_cp else None
+        last_cp_summary = last_cp.summary if last_cp else None
 
         agent = run.agent
         ticket = run.ticket or ""
@@ -496,13 +534,25 @@ async def resume_run(run_id: int) -> None:
         sdk_session_id = run.sdk_session_id
         cwd = Path(run.cwd)
 
-    console.print(f"[cyan]Resuming run #{run_id} ({agent} / {ticket})[/cyan]")
-    if last_cp:
-        console.print(Rule(f"Last checkpoint: {last_cp.kind}"))
-        console.print(last_cp.summary)
+    console.print(f"[cyan]Resuming run #{run_id} ({agent} / {ticket}) — {decision}[/cyan]")
+    if last_cp_kind:
+        console.print(Rule(f"Last checkpoint: {last_cp_kind}"))
+        if last_cp_summary:
+            console.print(last_cp_summary)
 
-    orch = Orchestrator(agent=agent, cwd=cwd, ticket=ticket, brief=brief)
+    orch = Orchestrator(agent=agent, cwd=cwd, ticket=ticket, brief=brief, one_shot=True)
     orch.run_id = run_id
+
+    # Build the decision message + record it on the pending checkpoint.
+    is_rejected = decision == "rejected"
+    orch._record_decision("rejected" if is_rejected else "approved", reason or "")
+    hd = HumanDecision(
+        checkpoint_kind=last_cp_kind if last_cp_kind in _HD_KINDS else "custom",
+        decision="rejected" if is_rejected else "approved",
+        reason=reason,
+        ticket=ticket or None,
+    )
+    resume_query = hd.to_prompt()
 
     options = ClaudeCodeOptions(
         cwd=str(cwd),
@@ -522,6 +572,8 @@ async def resume_run(run_id: int) -> None:
     )
 
     async with ClaudeSDKClient(options=options) as client:
+        # Deliver the decision so the agent proceeds past (or revises at) the gate.
+        await client.query(resume_query)
         stdin_task = asyncio.create_task(orch._stdin_loop())
         poll_task = asyncio.create_task(orch._db_poll_loop(client))
         try:
