@@ -311,8 +311,44 @@ async def run_acceptance(args: dict) -> dict:
     }
 
 
+VERDICT_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "overall_pass": {"type": "boolean"},
+        "criteria": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "criterion": {"type": "string"},
+                    "passed": {"type": "boolean"},
+                    "evidence": {"type": "string", "description": "What you DID in the browser and what you OBSERVED"},
+                    "screenshot": {"type": "string", "description": "Screenshot filename you saved for this criterion"},
+                },
+                "required": ["criterion", "passed", "evidence"],
+            },
+        },
+        "summary": {
+            "type": "string",
+            "description": "Overall verdict. On failure: actionable fix guidance (expected vs actual, selectors, repro steps) — this becomes the fix session's brief.",
+        },
+    },
+    "required": ["overall_pass", "criteria", "summary"],
+}
+
+
+@tool(
+    "record_verdict",
+    "File your final verification verdict — exactly once, after judging every criterion by acting in the browser.",
+    VERDICT_INPUT_SCHEMA,
+)
+async def record_verdict(args: dict) -> dict:
+    n = len(args.get("criteria") or [])
+    return {"content": [{"type": "text", "text": f"Verdict recorded ({n} criteria)."}]}
+
+
 ranch_mcp = create_sdk_mcp_server(
     name="ranch",
     version="0.1.0",
-    tools=[record_checkpoint, log_decision, record_state, run_acceptance, record_block],
+    tools=[record_checkpoint, log_decision, record_state, run_acceptance, record_block, record_verdict],
 )

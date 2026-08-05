@@ -1713,5 +1713,9 @@ def view_hand_cmd(hand_name: str, as_json: bool) -> None:
         console.print(t)
 
 
+from .verify import verify_cmd  # noqa: E402 — registered late to avoid import cycles
+cli.add_command(verify_cmd)
+
+
 if __name__ == "__main__":
     cli()

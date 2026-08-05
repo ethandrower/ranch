@@ -354,3 +354,24 @@ class HandEvent(Base):
     title       = Column(String)
     detail      = Column(Text, nullable=True)
     created_at  = Column(DateTime, default=utcnow, index=True)
+
+
+class Verdict(Base):
+    """A browser-verification verdict — one row per `ranch verify` session.
+
+    The verifier session (fresh context, Playwright MCP only) judges each
+    acceptance criterion by ACTING in the real UI, then files exactly one
+    verdict via the record_verdict MCP tool. `payload_json` holds the full
+    VerdictInput (per-criterion pass/fail + evidence + screenshot names);
+    `artifacts_dir` is where those screenshots live on disk.
+    """
+    __tablename__ = "verdicts"
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    run_id        = Column(Integer, ForeignKey("runs.id"), nullable=True, index=True)
+    ticket        = Column(String, nullable=True, index=True)
+    target_url    = Column(String)
+    overall_pass  = Column(Integer, default=0)     # bool
+    payload_json  = Column(Text)                   # full VerdictInput as JSON
+    artifacts_dir = Column(String, nullable=True)  # screenshots location
+    created_at    = Column(DateTime, default=utcnow, index=True)

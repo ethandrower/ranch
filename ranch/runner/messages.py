@@ -217,3 +217,52 @@ class HumanNote(BaseModel):
 
     def to_prompt(self) -> str:
         return f"[Human note mid-run]: {self.content}"
+
+
+# ─── Browser verification (the verify stage / proto-Inspector) ───────────────
+
+
+class CriterionVerdict(BaseModel):
+    """One acceptance criterion, judged by ACTING in the browser."""
+
+    criterion: str                    # the criterion text, verbatim
+    passed: bool
+    evidence: str                     # what the verifier DID and OBSERVED
+    screenshot: Optional[str] = None  # filename saved in the artifacts dir
+
+    @field_validator("evidence")
+    @classmethod
+    def evidence_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("evidence must not be empty")
+        return v
+
+
+class VerdictInput(BaseModel):
+    """Payload the verifier sends when calling mcp__ranch__record_verdict.
+
+    `summary` doubles as the feedback channel: on failure it must contain
+    actionable fix guidance (expected vs actual, selectors, repro steps) —
+    it becomes the brief for the fix-it development session.
+    """
+
+    overall_pass: bool
+    criteria: list[CriterionVerdict]
+    summary: str
+
+    def to_fix_brief(self, url: str, artifacts_dir: str | None = None) -> str:
+        """Render a failing verdict as the brief for a dev session."""
+        failed = [c for c in self.criteria if not c.passed]
+        lines = [
+            "A browser-based verification of your work FAILED. Fix the issues below,",
+            f"then stop. The app under test: {url}",
+            "",
+            "── FAILED CRITERIA ──",
+        ]
+        for c in failed:
+            lines.append(f"✗ {c.criterion}")
+            lines.append(f"    observed: {c.evidence}")
+            if c.screenshot and artifacts_dir:
+                lines.append(f"    screenshot: {artifacts_dir}/{c.screenshot}")
+        lines += ["", "── VERIFIER'S SUMMARY ──", self.summary]
+        return "\n".join(lines)
